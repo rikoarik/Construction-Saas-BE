@@ -6,9 +6,8 @@ import (
 	"net/http"
 )
 
-// NewRouter creates the minimal API router. Domain routes are added with their
-// application-service dependencies as the corresponding backend tasks land.
-func NewRouter(logger *slog.Logger) http.Handler {
+// NewRouter creates the API router and optionally mounts the password-auth adapter.
+func NewRouter(logger *slog.Logger, auth http.Handler) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -18,6 +17,9 @@ func NewRouter(logger *slog.Logger) http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
+	if auth != nil {
+		mux.Handle("/api/v1/auth/", auth)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, &Error{Status: http.StatusNotFound, Code: "NOT_FOUND"})
 	})

@@ -99,7 +99,7 @@ func TestLoggingMiddlewareRedactsQueryAndLogsRequestID(t *testing.T) {
 
 func TestRouterNotFoundUsesStableErrorEnvelope(t *testing.T) {
 	res := httptest.NewRecorder()
-	NewRouter(nil).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/missing", nil))
+	NewRouter(nil, nil).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/missing", nil))
 
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", res.Code, http.StatusNotFound)

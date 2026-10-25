@@ -83,6 +83,8 @@ type Error struct {
 	Params map[string]any `json:"params,omitempty"`
 }
 
+var ErrUnauthenticated = &Error{Status: http.StatusUnauthorized, Code: "UNAUTHENTICATED"}
+
 func (e *Error) Error() string { return e.Code }
 
 // WriteError emits the contract error envelope and request correlation ID.
