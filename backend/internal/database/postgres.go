@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,6 +15,7 @@ import (
 )
 
 var migrationFS = migrations.FS
+var migrationMu sync.Mutex
 
 func poolConfig(databaseURL string) (*pgxpool.Config, error) {
 	if databaseURL == "" {
@@ -52,6 +54,8 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 
 // Migrate applies embedded Goose migrations to the database URL.
 func Migrate(ctx context.Context, databaseURL string) error {
+	migrationMu.Lock()
+	defer migrationMu.Unlock()
 	if databaseURL == "" {
 		return errors.New("database URL is required")
 	}
@@ -61,6 +65,18 @@ func Migrate(ctx context.Context, databaseURL string) error {
 		return fmt.Errorf("open migration database: %w", err)
 	}
 	defer db.Close()
+
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reserve migration lock connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(721946283051)`); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(721946283051)`)
+	}()
 
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("set migration dialect: %w", err)
