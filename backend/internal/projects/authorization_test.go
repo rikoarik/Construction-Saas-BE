@@ -106,6 +106,61 @@ func TestPermissionPolicyDefaultDenies(t *testing.T) {
 	}
 }
 
+func TestCrossTenantGuessedProjectIDsDenied(t *testing.T) {
+	authorizer, tenants, users, pool := setup(t)
+	ctx := context.Background()
+	stamp := time.Now().Format("20060102150405.000000000")
+	ownerA, err := users.CreateUser(ctx, "be015-owner-a-"+stamp+"@example.invalid", "$hash", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerB, err := users.CreateUser(ctx, "be015-owner-b-"+stamp+"@example.invalid", "$hash", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := users.CreateUser(ctx, "be015-member-"+stamp+"@example.invalid", "$hash", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	companyA, err := tenants.CreateCompany(ctx, ownerA.ID, "BE015 A", "be015-a-"+stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	companyB, err := tenants.CreateCompany(ctx, ownerB.ID, "BE015 B", "be015-b-"+stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectA, err := createProject(ctx, pool, companyA.ID, "be015-project-a-"+stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectB, err := createProject(ctx, pool, companyB.ID, "be015-project-b-"+stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO app.company_memberships(company_id,user_id,role,status) VALUES($1::uuid,$2::uuid,'member','active')`, companyA.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO app.project_memberships(company_id,project_id,user_id,role,status) VALUES($1::uuid,$2::uuid,$3::uuid,'supervisor','active')`, companyA.ID, projectA, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	policy := GrantPolicy{"supervisor": {"project.read": {}}}
+	checks := []struct {
+		name, companyID, projectID string
+	}{
+		{"guessed project from another tenant", companyA.ID, projectB},
+		{"guessed company paired with own project", companyB.ID, projectA},
+		{"unknown project ID", companyA.ID, "00000000-0000-0000-0000-000000000000"},
+	}
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := authorizer.Check(ctx, member.ID, tc.companyID, tc.projectID, "project.read", policy); !errors.Is(err, ErrDenied) {
+				t.Fatalf("cross-tenant project access error = %v, want denied", err)
+			}
+		})
+	}
+}
+
 func TestInactiveCompanyOrProjectMembershipDenied(t *testing.T) {
 	authorizer, tenants, users, pool := setup(t)
 	ctx := context.Background()

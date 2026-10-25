@@ -135,6 +135,69 @@ func TestMembershipUniquenessAndCompanyScopedReads(t *testing.T) {
 	}
 }
 
+func TestCrossTenantGuessedCompanyIDsDeniedAcrossCompanyResources(t *testing.T) {
+	store, users := setup(t)
+	ctx := context.Background()
+	stamp := unique()
+	owner, err := users.CreateUser(ctx, "be015-scope-owner-"+stamp+"@example.invalid", "$hash", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := users.CreateUser(ctx, "be015-scope-member-"+stamp+"@example.invalid", "$hash", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider, err := users.CreateUser(ctx, "be015-scope-outsider-"+stamp+"@example.invalid", "$hash", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	companyA, err := store.CreateCompany(ctx, owner.ID, "BE015 A", "be015-company-a-"+stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	companyB, err := store.CreateCompany(ctx, owner.ID, "BE015 B", "be015-company-b-"+stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `INSERT INTO app.company_memberships(company_id,user_id,role,status) VALUES($1::uuid,$2::uuid,'member','active')`, companyA.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, userID, companyID string
+	}{
+		{"outsider guessed members", outsider.ID, companyA.ID},
+		{"member guessed another company members", member.ID, companyB.ID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := store.ListMembers(ctx, tc.companyID, tc.userID, 50); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("ListMembers error = %v, want not found", err)
+			}
+		})
+	}
+
+	invitation, err := store.CreateInvitation(ctx, owner.ID, companyB.ID, "be015-invite-"+stamp+"@example.invalid", "member", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invitation.Token == "" {
+		t.Fatal("owner-created invitation is missing a token")
+	}
+	if _, err := store.ListInvitations(ctx, member.ID, companyB.ID, 50); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-company ListInvitations error = %v, want not found", err)
+	}
+	memberB, err := users.CreateUser(ctx, "be015-member-b-"+stamp+"@example.invalid", "$hash", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `INSERT INTO app.company_memberships(company_id,user_id,role,status) VALUES($1::uuid,$2::uuid,'member','active')`, companyB.ID, memberB.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateInvitation(ctx, memberB.ID, companyB.ID, "be015-forbidden-"+stamp+"@example.invalid", "member", time.Hour); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("member CreateInvitation error = %v, want forbidden", err)
+	}
+}
+
 func TestInvitationTokenHashAndCompanyAuthorization(t *testing.T) {
 	store, users := setup(t)
 	stamp := unique()

@@ -28,7 +28,7 @@ Status: `planned -> contract_ready -> in_progress -> in_review -> verified -> re
 | BE-012 | CSRF/rate limit/security middleware | BE-011 | negative tests |
 | BE-013 | company + membership + invitation | BE-010 | scoped API tests |
 | BE-014 | project membership/permission engine | BE-013 | default-deny matrix tests |
-| BE-015 | cross-tenant negative suite harness | BE-014 | IDOR tests across resources |
+| BE-015 | cross-tenant negative suite harness | BE-014 | verified: cross-tenant guessed company/project ID denial tests in `backend/internal/tenancy/store_test.go` and `backend/internal/projects/authorization_test.go`; DB-backed tests pass with `TEST_DATABASE_URL` |
 | BE-016 | support-access elevation + audit | BE-008,BE-014 | explicit grant/revoke tests |
 
 ## B2 — Projects, contracts, WBS, locations
