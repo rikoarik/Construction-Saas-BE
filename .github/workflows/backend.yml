@@ -13,6 +13,20 @@ on:
 jobs:
   go:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: construction_saas_test
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d construction_saas_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
     defaults:
       run:
         working-directory: backend
@@ -22,5 +36,5 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache: false
-      - run: go test ./...
+      - run: TEST_DATABASE_URL='postgres://app:app@localhost:5432/construction_saas_test?sslmode=disable' go test ./...
       - run: go vet ./...
