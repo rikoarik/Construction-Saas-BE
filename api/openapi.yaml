@@ -35,17 +35,35 @@ paths:
                 email: { type: string, format: email }
                 password: { type: string, minLength: 1 }
       responses:
-        '200':
-          description: Authenticated session established using a secure cookie.
+        '204': { description: Authenticated session cookie established. }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /auth/logout:
     post:
       tags: [auth]
       operationId: logout
       responses:
-        '204': { description: Current session revoked. }
+        '204': { description: Current session revoked and cookie cleared. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/csrf:
+    get:
+      tags: [auth]
+      operationId: getCsrfToken
+      responses:
+        '200':
+          description: Session-bound token for unsafe cookie-authenticated requests; response is no-store.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [csrf_token]
+                properties:
+                  csrf_token: { type: string, minLength: 32 }
         '401': { $ref: '#/components/responses/Unauthenticated' }
   /companies:
     post:
@@ -57,13 +75,28 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name]
+              required: [name, slug]
               properties:
-                name: { type: string, minLength: 1 }
-                slug: { type: string, minLength: 1 }
+                name: { type: string, minLength: 1, maxLength: 200 }
+                slug: { type: string, minLength: 1, maxLength: 120, pattern: '^[a-z0-9][a-z0-9-]*$' }
       responses:
-        '201': { description: Company created with owner membership. }
+        '201':
+          description: Company and initial owner membership created atomically.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Company' }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [companies]
+      operationId: listCompanies
+      responses:
+        '200':
+          description: Companies where the caller has active membership.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanyPage' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
   /companies/{companyId}/invitations:
     parameters:
@@ -71,8 +104,6 @@ paths:
     post:
       tags: [companies]
       operationId: inviteCompanyMember
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -81,11 +112,32 @@ paths:
               type: object
               required: [email, role]
               properties:
-                email: { type: string, format: email }
-                role: { type: string }
+                email: { type: string, format: email, maxLength: 320 }
+                role: { type: string, enum: [admin, member, viewer] }
       responses:
-        '201': { description: Invitation created. }
+        '201':
+          description: Company-scoped invitation created; plaintext token is returned once.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invitation' }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [companies]
+      operationId: listCompanyInvitations
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Scoped invitation listing for company owners and administrators.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvitationPage' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -96,52 +148,19 @@ paths:
       tags: [companies]
       operationId: listCompanyMembers
       parameters:
-        - $ref: '#/components/parameters/Cursor'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
       responses:
         '200':
-          description: Scoped company membership page.
+          description: Scoped company member page; requires owner or admin role.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Page' }
+              schema: { $ref: '#/components/schemas/MemberPage' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-  /companies/{companyId}/projects:
-    parameters:
-      - $ref: '#/components/parameters/CompanyId'
-    post:
-      tags: [projects]
-      operationId: createProject
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [project_code, name]
-              properties:
-                project_code: { type: string, minLength: 1 }
-                name: { type: string, minLength: 1 }
-                project_type: { type: string }
-                timezone: { type: string }
-      responses:
-        '201': { description: Project created in the selected company. }
-        '400': { $ref: '#/components/responses/ValidationError' }
-        '401': { $ref: '#/components/responses/Unauthenticated' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-    get:
-      tags: [projects]
-      operationId: listProjects
-      parameters:
-        - $ref: '#/components/parameters/Cursor'
-      responses:
-        '200':
-          description: Scoped project page.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Page' }
-        '401': { $ref: '#/components/responses/Unauthenticated' }
-        '403': { $ref: '#/components/responses/Forbidden' }
   /projects/{projectId}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -599,6 +618,53 @@ components:
       type: string
       pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
       examples: ['19.04']
+    Company:
+      type: object
+      required: [id, name, slug, status, role, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        status: { type: string, enum: [active, suspended] }
+        role: { type: string, enum: [owner, admin, member, viewer] }
+        created_at: { type: string, format: date-time }
+    CompanyPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Company' } }
+        next_cursor: { type: [string, 'null'] }
+    Member:
+      type: object
+      required: [user_id, email, role, status, created_at]
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [owner, admin, member, viewer] }
+        status: { type: string, enum: [active, suspended, removed] }
+        created_at: { type: string, format: date-time }
+    MemberPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Member' } }
+        next_cursor: { type: [string, 'null'] }
+    Invitation:
+      type: object
+      required: [id, company_id, email, role, expires_at, token]
+      properties:
+        id: { type: string, format: uuid }
+        company_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [admin, member, viewer] }
+        expires_at: { type: string, format: date-time }
+        token: { type: string, writeOnly: true }
+    InvitationPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Invitation' } }
+        next_cursor: { type: [string, 'null'] }
     Page:
       type: object
       required: [items]
@@ -675,6 +741,5 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
-
 security:
   - sessionCookie: []

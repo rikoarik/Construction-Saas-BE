@@ -16,6 +16,7 @@ import (
 	"construction-saas/backend/internal/database"
 	"construction-saas/backend/internal/httpapi"
 	"construction-saas/backend/internal/identity"
+	"construction-saas/backend/internal/tenancy"
 )
 
 func main() {
@@ -44,9 +45,15 @@ func main() {
 		logger.Error("create identity store", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	tenancyStore, err := tenancy.NewStore(pool)
+	if err != nil {
+		logger.Error("create tenancy store", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 	authService := &identity.AuthService{Store: identityStore, Logger: logger}
 	authMux := http.NewServeMux()
 	identity.RegisterAuthRoutes(authMux, authService, os.Getenv("APP_ENV") == "production")
+	(&tenancy.Handler{Store: tenancyStore, Auth: authService}).Register(authMux)
 
 	csrfConfig, err := securityCSRFConfig(authService)
 	if err != nil {
