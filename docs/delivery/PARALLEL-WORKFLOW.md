@@ -1,44 +1,65 @@
-# Parallel Claude CLI Workflow — Frontend Repository
+# Parallel Claude CLI Workflow — Backend Repository
 
-Frontend is a separate repository and can run concurrently with both backend-core and bot lanes.
+This repository has **two parallel engineering lanes**:
 
-## Branch/worktree
+1. `backend-core` — Go domain/API/database/workers.
+2. `bot` — Telegram Bot adapter and delivery.
+
+They share one repository but must use separate branches/worktrees and file ownership.
+
+## Worktrees
+
+From the backend repository:
 
 ```bash
-git worktree add ../construction-frontend-lane -b lane/frontend
+git worktree add ../construction-backend-core -b lane/backend-core
+git worktree add ../construction-backend-bot -b lane/bot
 ```
 
-Run Claude in that worktree.
-
-## Frontend can proceed without waiting for backend
-
-Use the reviewed API/OpenAPI contract and conforming mock fixtures. Frontend must not invent response fields because a backend endpoint is unfinished.
-
-```text
-Backend contract ready
-       |
-       +--> backend-core implementation
-       |
-       +--> frontend generated types + mocks + UI
-       |
-       +--> bot adapter when relevant
-                   |
-                   v
-              integration/E2E
-```
+Run one Claude session in each worktree.
 
 ## Ownership
 
-Frontend session owns:
+### backend-core lane may edit
 
-- Next.js application;
-- design system;
-- i18n catalogs;
-- web UI;
-- Telegram Mini App UI;
-- client API layer generated from contract;
-- frontend tests.
+- domain/application packages;
+- repositories/database/migrations;
+- API endpoints;
+- calculation/reporting code;
+- generic notification/outbox infrastructure;
+- `BACKEND.md`, `BACKEND-TASKS.md`, database/calculation/API docs.
 
-It does not modify backend behavior to satisfy UI assumptions.
+### bot lane may edit
 
-When a contract is insufficient, record the required contract change instead of adding frontend-only fake semantics that will diverge from production.
+- `internal/integrations/telegram/**` or equivalent Telegram adapter packages;
+- Telegram delivery adapter/tests;
+- `BOT.md` and `BOT-TASKS.md`.
+
+### shared touch points
+
+Route registration, generated interfaces, dependency wiring, and canonical API contracts are integration touch points. Avoid editing them concurrently. Assign one explicit integration task after both lane branches are ready.
+
+## Dependency rule
+
+Bot work depends on backend application ports/contracts, not backend implementation details. If the bot lane needs a new core capability:
+
+1. define the required interface/contract;
+2. create a backend-core task;
+3. backend-core implements and tests it;
+4. bot integrates against it.
+
+The bot lane must not bypass this by reading/writing domain tables directly.
+
+## Merge order
+
+For a capability that affects both lanes:
+
+```text
+contract/application port
+        -> backend-core implementation
+        -> bot adapter implementation
+        -> integration tests
+        -> merge
+```
+
+Independent bot transport work may proceed before backend implementation when it uses fakes for the agreed port.

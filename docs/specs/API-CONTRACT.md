@@ -1,7 +1,4 @@
-# API Contract Mirror — Frontend Consumer Copy
-
-> **GENERATED/READ ONLY.** Canonical source: backend repository `docs/API-CONTRACT.md`. Do not edit this mirror directly.
-
+# REST API Contract — Human-Readable Draft
 
 **Status:** Proposed; future executable source: `api/openapi.yaml` + generated API client.  
 **Owner:** Go Backend · **Root:** `/api/v1` · **Transport:** JSON over HTTPS, multipart/form-data only when approved.  
