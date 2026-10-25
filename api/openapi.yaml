@@ -1,0 +1,680 @@
+openapi: 3.1.0
+info:
+  title: Construction SaaS API
+  version: 1.0.0-draft
+  description: >-
+    Machine-readable representation of the proposed API contract. This describes
+    intended behavior; it does not imply that endpoints are implemented.
+servers:
+  - url: https://api.example.invalid/api/v1
+    description: Placeholder; replace before deployment.
+tags:
+  - name: auth
+  - name: companies
+  - name: projects
+  - name: budgets
+  - name: planning
+  - name: reports
+  - name: progress
+  - name: documents
+  - name: telegram
+paths:
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Authenticated session established using a secure cookie.
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      responses:
+        '204': { description: Current session revoked. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /companies:
+    post:
+      tags: [companies]
+      operationId: createCompany
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1 }
+                slug: { type: string, minLength: 1 }
+      responses:
+        '201': { description: Company created with owner membership. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /companies/{companyId}/invitations:
+    parameters:
+      - $ref: '#/components/parameters/CompanyId'
+    post:
+      tags: [companies]
+      operationId: inviteCompanyMember
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email: { type: string, format: email }
+                role: { type: string }
+      responses:
+        '201': { description: Invitation created. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /companies/{companyId}/members:
+    parameters:
+      - $ref: '#/components/parameters/CompanyId'
+    get:
+      tags: [companies]
+      operationId: listCompanyMembers
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Scoped company membership page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Page' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /companies/{companyId}/projects:
+    parameters:
+      - $ref: '#/components/parameters/CompanyId'
+    post:
+      tags: [projects]
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_code, name]
+              properties:
+                project_code: { type: string, minLength: 1 }
+                name: { type: string, minLength: 1 }
+                project_type: { type: string }
+                timezone: { type: string }
+      responses:
+        '201': { description: Project created in the selected company. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [projects]
+      operationId: listProjects
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Scoped project page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Page' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [projects]
+      operationId: getProject
+      responses:
+        '200': { description: Authorized project details. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /projects/{projectId}/work-items:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [projects]
+      operationId: createWorkItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [work_code, name]
+              properties:
+                work_code: { type: string, minLength: 1 }
+                name: { type: string, minLength: 1 }
+                parent_id: { type: string, format: uuid }
+                unit_id: { type: string, format: uuid }
+                measure_method: { type: string, enum: [quantity, milestone, verified_percent] }
+      responses:
+        '201': { description: Work item created in the project. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /projects/{projectId}/budget-imports:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [budgets]
+      operationId: createBudgetImport
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '202': { description: Private upload staged for import parsing. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /budget-imports/{importId}/mapping:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    put:
+      tags: [budgets]
+      operationId: mapBudgetImport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Updated mapping and parse preview. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /budget-imports/{importId}/finalize:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    post:
+      tags: [budgets]
+      operationId: finalizeBudgetImport
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201': { description: Draft budget version created. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+  /budget-versions/{versionId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/VersionId'
+    post:
+      tags: [budgets]
+      operationId: approveBudget
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Immutable budget version approved. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+  /projects/{projectId}/baselines:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [planning]
+      operationId: createBaseline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '201': { description: Draft weekly baseline created. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /plan-baselines/{baselineId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/BaselineId'
+    post:
+      tags: [planning]
+      operationId: approveBaseline
+      responses:
+        '200': { description: Immutable baseline approved. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /projects/{projectId}/reports:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [reports]
+      operationId: createDailyReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReport' }
+      responses:
+        '201': { description: Draft daily report created. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /reports/{reportId}:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    patch:
+      tags: [reports]
+      operationId: updateDailyReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReport' }
+      responses:
+        '200': { description: Updated editable report revision. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /reports/{reportId}/submit:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      tags: [reports]
+      operationId: submitDailyReport
+      responses:
+        '200': { description: Report submitted for review. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+  /reports/{reportId}/request-revision:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      tags: [reports]
+      operationId: requestReportRevision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1 }
+      responses:
+        '200': { description: Report returned for revision. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /reports/{reportId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      tags: [reports]
+      operationId: rejectDailyReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1 }
+      responses:
+        '200': { description: Report rejected without ledger posting. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /reports/{reportId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      tags: [reports]
+      operationId: approveDailyReport
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [report_revision]
+              properties:
+                report_revision: { type: integer, minimum: 1 }
+                comment: { type: string }
+      responses:
+        '200':
+          description: Approval advanced; final approval posts the ledger exactly once.
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [under_review, approved] }
+                  approved_at: { type: string, format: date-time }
+                  ledger_commit_id: { type: string, format: uuid }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+  /projects/{projectId}/progress:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [progress]
+      operationId: getProjectProgress
+      parameters:
+        - name: as_of_date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: budget_version_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: baseline_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Progress values calculated from approved ledger and baseline.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [project_id, as_of_date, budget_version_id, baseline_id, planned_cumulative_pct, actual_cumulative_pct, deviation_pp, updated_at]
+                properties:
+                  project_id: { type: string, format: uuid }
+                  as_of_date: { type: string, format: date }
+                  budget_version_id: { type: string, format: uuid }
+                  baseline_id: { type: string, format: uuid }
+                  planned_cumulative_pct: { $ref: '#/components/schemas/DecimalString' }
+                  actual_cumulative_pct: { $ref: '#/components/schemas/DecimalString' }
+                  deviation_pp: { $ref: '#/components/schemas/DecimalString' }
+                  updated_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /projects/{projectId}/reports/weekly:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [reports]
+      operationId: previewWeeklyReport
+      responses:
+        '200': { description: Authoritative report preview from pinned source versions. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /projects/{projectId}/documents:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [documents]
+      operationId: createDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [period_id, template_id, format]
+              properties:
+                period_id: { type: string, format: uuid }
+                template_id: { type: string, format: uuid }
+                format: { type: string, enum: [xlsx, pdf] }
+      responses:
+        '202': { description: Immutable snapshot frozen and async generation scheduled. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /documents/{documentId}/publish:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    post:
+      tags: [documents]
+      operationId: publishDocument
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Generated revision published and audited. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /documents/{documentId}/download:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [documents]
+      operationId: getDocumentDownload
+      responses:
+        '200':
+          description: Authorized short-lived download location.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expires_at]
+                properties:
+                  url: { type: string, format: uri }
+                  expires_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /integrations/telegram/link-token:
+    post:
+      tags: [telegram]
+      operationId: createTelegramLinkToken
+      responses:
+        '201': { description: Short-lived one-time account-link token issued. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /integrations/telegram/miniapp-session:
+    post:
+      tags: [telegram]
+      operationId: createTelegramMiniAppSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [init_data]
+              properties:
+                init_data: { type: string, minLength: 1, writeOnly: true }
+      responses:
+        '200': { description: Session bootstrap after signed initData verification. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /integrations/telegram/webhook:
+    post:
+      tags: [telegram]
+      operationId: telegramWebhook
+      security: []
+      parameters:
+        - name: X-Telegram-Bot-Api-Secret-Token
+          in: header
+          required: true
+          schema: { type: string, minLength: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Update accepted or safely deduplicated. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '413': { description: Request body exceeds configured maximum. }
+        '422': { $ref: '#/components/responses/ValidationError' }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+  parameters:
+    CompanyId:
+      name: companyId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ImportId:
+      name: importId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BaselineId:
+      name: baselineId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 1 }
+  schemas:
+    DecimalString:
+      type: string
+      pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+      examples: ['19.04']
+    Page:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { type: object, additionalProperties: true }
+        next_cursor: { type: [string, 'null'] }
+    CreateReport:
+      type: object
+      required: [report_date, entries]
+      properties:
+        report_date: { type: string, format: date }
+        entries:
+          type: array
+          items:
+            type: object
+            required: [work_item_id, measure_kind]
+            properties:
+              work_item_id: { type: string, format: uuid }
+              location_id: { type: [string, 'null'], format: uuid }
+              measure_kind: { type: string, enum: [quantity] }
+              quantity_delta: { $ref: '#/components/schemas/DecimalString' }
+              notes: { type: string }
+        attachment_ids:
+          type: array
+          items: { type: string, format: uuid }
+    Error:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          enum: [VALIDATION_ERROR, UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, BUSINESS_RULE_VIOLATION, RATE_LIMITED, INTERNAL_ERROR]
+        params: { type: object, additionalProperties: true }
+  responses:
+    ValidationError:
+      description: Request failed validation.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthenticated:
+      description: Authentication is required.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: The operation is not permitted.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource was not found or is not visible.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Request conflicts with current or previously processed state.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BusinessRuleViolation:
+      description: Request violates a business invariant.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Request rate limit exceeded.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error:
+      description: Stable machine-readable error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+security:
+  - sessionCookie: []

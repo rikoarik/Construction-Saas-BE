@@ -10,7 +10,8 @@ Run from this directory:
 go test ./...
 go test ./internal/database -run TestPoolConfig
 go vet ./...
-go run ./cmd/api
+cd .. && ./tools/check_api_contract.sh
+cd backend && go run ./cmd/api
 go run ./cmd/worker
 ```
 

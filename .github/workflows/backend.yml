@@ -36,5 +36,6 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache: false
+      - run: ruby -v && ruby ../scripts/validate-openapi.rb ../api/openapi.yaml
       - run: TEST_DATABASE_URL='postgres://app:app@localhost:5432/construction_saas_test?sslmode=disable' go test ./...
       - run: go vet ./...
