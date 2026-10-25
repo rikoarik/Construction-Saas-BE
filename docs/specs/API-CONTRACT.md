@@ -6,7 +6,8 @@
 
 ## 1. Global rules
 
-- Authentication: secure opaque session cookie for web; Telegram Mini App obtains backend session only after signed `initData` verification. CSRF defense for cookie-authenticated mutations.
+- Authentication: secure opaque session cookie for web; Telegram Mini App obtains backend session only after signed `initData` verification. CSRF defense for cookie-authenticated mutations. Login/logout use `POST /auth/login` and `POST /auth/logout`; production deployments enforce Secure, HttpOnly and SameSite=Lax cookies.
+- CSRF bootstrap: authenticated clients call `GET /auth/csrf` (not cached) and send the returned `csrf_token` in `X-CSRF-Token` for unsafe cookie-authenticated methods. The token is bound to the active session. Login is public and instead requires an exact configured `Origin` or `Referer`; reject `Sec-Fetch-Site: cross-site`.
 - Authorization: company membership + resource-specific project permission checked on **every** request. `company_id` supplied by client is only a selector.
 - `Idempotency-Key` required for mutating approval/publish/import-finalize endpoints, recorded scoped by actor/tenant/action.
 - Use `application/json`, ISO8601 timestamps with offset/UTC; date-only for period dates in project timezone; decimal numeric fields transported as **strings**, e.g. `"19.04"`.
@@ -20,6 +21,7 @@
 |---|---|---|---|
 | POST | `/auth/login` | public | Establish session, rate limited |
 | POST | `/auth/logout` | authenticated | Revoke current session |
+| GET | `/auth/csrf` | authenticated | Return session-bound CSRF token, no-store |
 | POST | `/companies` | authenticated owner candidate | Create tenant + owner membership |
 | POST | `/companies/{companyId}/invitations` | members.invite | Scoped invitation |
 | GET | `/companies/{companyId}/members` | members.read | List permitted members |
