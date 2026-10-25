@@ -16,6 +16,7 @@ import (
 	"construction-saas/backend/internal/database"
 	"construction-saas/backend/internal/httpapi"
 	"construction-saas/backend/internal/identity"
+	"construction-saas/backend/internal/projects"
 	"construction-saas/backend/internal/tenancy"
 )
 
@@ -24,7 +25,6 @@ func main() {
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		logger.Error("DATABASE_URL is required")
@@ -50,11 +50,16 @@ func main() {
 		logger.Error("create tenancy store", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	authorizer, err := projects.NewAuthorizer(pool)
+	if err != nil {
+		logger.Error("create project authorizer", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	_ = authorizer // Project endpoints receive this engine as their API tasks land.
 	authService := &identity.AuthService{Store: identityStore, Logger: logger}
 	authMux := http.NewServeMux()
 	identity.RegisterAuthRoutes(authMux, authService, os.Getenv("APP_ENV") == "production")
 	(&tenancy.Handler{Store: tenancyStore, Auth: authService}).Register(authMux)
-
 	csrfConfig, err := securityCSRFConfig(authService)
 	if err != nil {
 		logger.Error("configure CSRF", slog.String("error", err.Error()))
@@ -71,7 +76,6 @@ func main() {
 		os.Exit(1)
 	}
 	security := httpapi.SecurityConfig{CSRF: csrfConfig, LoginLimit: loginLimiter, APILimiter: apiLimiter, HTTPS: os.Getenv("APP_ENV") == "production"}
-
 	addr := os.Getenv("API_ADDR")
 	if addr == "" {
 		addr = ":8080"
@@ -103,7 +107,6 @@ func (r authSessionResolver) ResolveSessionID(request *http.Request) (string, er
 	}
 	return session.ID, nil
 }
-
 func securityCSRFConfig(service *identity.AuthService) (httpapi.CSRFConfig, error) {
 	secret := os.Getenv("CSRF_SECRET")
 	if secret == "" {
@@ -124,7 +127,6 @@ func securityCSRFConfig(service *identity.AuthService) (httpapi.CSRFConfig, erro
 	}
 	return httpapi.CSRFConfig{Enabled: true, SessionCookie: identity.SessionCookieName, Secret: []byte(secret), Resolver: authSessionResolver{service: service}, TrustedOrigins: origins}, nil
 }
-
 func rateLimiterFromEnv(prefix string, defaults httpapi.RateLimitConfig) (*httpapi.RateLimiter, error) {
 	capacity, window, maxKeys := defaults.Capacity, defaults.Window, defaults.MaxKeys
 	if value := os.Getenv(prefix + "_CAPACITY"); value != "" {
