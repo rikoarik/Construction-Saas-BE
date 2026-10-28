@@ -1,1 +1,0 @@
-Follow the repository `AGENTS.md` as the canonical engineering rules. Read the domain document and task file referenced there before implementing a change. Do not cross repository/lane ownership boundaries to work around a missing contract.
