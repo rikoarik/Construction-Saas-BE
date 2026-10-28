@@ -4,14 +4,14 @@
 
 ## Current baseline
 
-Company creation/listing, admin member listing, and invitation creation/listing are implemented in `backend/internal/tenancy`; invitation tokens are hashed and creation is audited. Project permission checks exist in `backend/internal/projects/authorization.go`, not project CRUD on this branch. Invitation acceptance and member management are not implemented. The working tree also contains uncommitted invitation authorization locking and separately owned notification changes; neither should be treated as released. PostgreSQL-backed tests require a dedicated `TEST_DATABASE_URL`.
+Company creation/listing, admin member listing, and invitation creation/listing are implemented in `backend/internal/tenancy`; invitation tokens are hashed and creation is audited. Project permission checks exist in `backend/internal/projects/authorization.go`, not project CRUD on this branch. Invitation acceptance and member management are not implemented. Invitation authorization locks the active membership during creation; separately owned notification changes in the working tree are not release evidence. PostgreSQL-backed tests require a dedicated `TEST_DATABASE_URL`.
 
 ## Ordered work
 
 | ID | Status | Scope and acceptance | Dependencies / evidence |
 |---|---|---|---|
 | BE-CA-001 | verified | Reject malformed invitation email input before any database write; accept a single bare mailbox, reject display names, lists and header injection. | `backend/internal/tenancy/invitation_email.go`, `store.go`, `invitation_email_test.go`; unit tests. Does not claim end-to-end invitation lifecycle. |
-| BE-CA-002 | in_progress | Verify the existing invitation authorization transaction lock against concurrent membership suspension; preserve 404 for nonmembers and 403 for insufficient active roles. | Existing uncommitted `store.go` and `invitation_authorization_test.go`; requires real PostgreSQL and negative role/tenant tests before verification. |
+| BE-CA-002 | verified | Verify the invitation authorization transaction lock against concurrent membership suspension; preserve 404 for nonmembers and 403 for insufficient active roles. | `backend/internal/tenancy/store.go`, `invitation_authorization_test.go`, and `store_test.go`; PostgreSQL-backed `go test -race ./... -count=1` passed, including role and cross-tenant negatives. |
 | BE-CA-003 | planned | Define and review invitation acceptance contract and policy: matching authenticated identity, expiry, replay/concurrency, existing or suspended membership, audit and safe token handling. Implement atomic acceptance only after approval. | BE-CA-002; BE-013; contract review, PostgreSQL transaction and race tests. |
 | BE-CA-004 | planned | Define member role/status changes and last-owner protection; enforce tenant-scoped authorization, transactional audit, concurrent changes and no escalation. | BE-CA-002; reviewed role policy and API contract; BE-AC-001/002 integration tests. |
 | BE-CA-005 | planned | Company settings read/update with validated timezone and audited owner/admin permission; specify allowed settings and concurrency policy first. | BE-013, BE-024; reviewed contract and tenant/role tests. |

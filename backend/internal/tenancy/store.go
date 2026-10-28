@@ -163,13 +163,6 @@ func (s *Store) CreateInvitation(ctx context.Context, actorID, companyID, email,
 	if actorID == "" || companyID == "" || normalized == "" || len(normalized) > 320 || !validInvitationEmail(email) || ttl <= 0 || ttl > 30*24*time.Hour || (role != "admin" && role != "member" && role != "viewer") {
 		return Invitation{}, ErrInvalid
 	}
-	actorRole, err := s.Membership(ctx, companyID, actorID)
-	if err != nil {
-		return Invitation{}, ErrNotFound
-	}
-	if actorRole != "owner" && actorRole != "admin" {
-		return Invitation{}, ErrForbidden
-	}
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
 		return Invitation{}, fmt.Errorf("generate invitation token: %w", err)
@@ -183,6 +176,19 @@ func (s *Store) CreateInvitation(ctx context.Context, actorID, companyID, email,
 		return Invitation{}, err
 	}
 	defer tx.Rollback(ctx)
+	// Hold a share lock until commit so concurrent role/status changes cannot
+	// invalidate the authorization decision before the invitation is written.
+	var actorRole string
+	err = tx.QueryRow(ctx, `SELECT role FROM app.company_memberships WHERE company_id=$1::uuid AND user_id=$2::uuid AND status='active' FOR SHARE`, companyID, actorID).Scan(&actorRole)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Invitation{}, ErrNotFound
+	}
+	if err != nil {
+		return Invitation{}, fmt.Errorf("authorize invitation: %w", err)
+	}
+	if actorRole != "owner" && actorRole != "admin" {
+		return Invitation{}, ErrForbidden
+	}
 	var item Invitation
 	err = tx.QueryRow(ctx, `INSERT INTO app.company_invitations(company_id,email,email_normalized,token_hash,role,expires_at,created_by) VALUES($1::uuid,$2,$3,$4,$5,$6,$7::uuid) RETURNING id::text,company_id::text,email,role,expires_at`, companyID, email, normalized, tokenHash, role, expires, actorID).Scan(&item.ID, &item.CompanyID, &item.Email, &item.Role, &item.ExpiresAt)
 	if err != nil {
