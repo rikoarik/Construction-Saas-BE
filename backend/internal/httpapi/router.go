@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// NewRouter creates the API router and optionally mounts the auth adapter.
-func NewRouter(logger *slog.Logger, auth http.Handler, security SecurityConfig) http.Handler {
+// NewRouter creates the API router and optionally mounts the API handler.
+func NewRouter(logger *slog.Logger, api http.Handler, security SecurityConfig) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -20,15 +20,15 @@ func NewRouter(logger *slog.Logger, auth http.Handler, security SecurityConfig) 
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
-	if auth != nil {
-		var authRoutes http.Handler = auth
+	if api != nil {
+		var apiRoutes http.Handler = api
 		if security.LoginLimit != nil {
 			limited := http.NewServeMux()
-			limited.Handle("/api/v1/auth/login", security.LoginLimit.Middleware("login", auth))
-			limited.Handle("/", auth)
-			authRoutes = limited
+			limited.Handle("/api/v1/auth/login", security.LoginLimit.Middleware("login", api))
+			limited.Handle("/", api)
+			apiRoutes = limited
 		}
-		mux.Handle("/api/v1/auth/", authRoutes)
+		mux.Handle("/api/v1/", apiRoutes)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, &Error{Status: http.StatusNotFound, Code: "NOT_FOUND"})
