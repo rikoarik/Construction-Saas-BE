@@ -56,7 +56,7 @@ func (w *statusWriter) Write(body []byte) (int, error) {
 	return w.ResponseWriter.Write(body)
 }
 
-// LoggingMiddleware logs request metadata without query strings or bodies.
+// LoggingMiddleware logs request metadata without URLs or bodies, which may contain secrets.
 func LoggingMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
@@ -69,10 +69,23 @@ func LoggingMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 		logger.InfoContext(r.Context(), "http request",
 			slog.String("request_id", RequestID(r.Context())),
 			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
 			slog.Int("status", status),
 			slog.Duration("duration", time.Since(started)),
 		)
+	})
+}
+
+// RecoverMiddleware prevents a panic from exposing internal details to clients.
+// It deliberately does not log the panic value, which may contain secrets.
+func RecoverMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recover() != nil {
+				logger.ErrorContext(r.Context(), "http handler panic", slog.String("request_id", RequestID(r.Context())))
+				WriteError(w, r, &Error{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR"})
+			}
+		}()
+		next.ServeHTTP(w, r)
 	})
 }
 

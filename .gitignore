@@ -1,0 +1,8 @@
+# Local secrets and per-developer configuration.
+.env
+.env.*
+!.env.example
+
+# Build and test artifacts.
+backend/bin/
+backend/coverage.out

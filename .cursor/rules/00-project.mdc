@@ -1,5 +1,0 @@
----
-description: Canonical repository rules
-alwaysApply: true
----
-Read and follow `AGENTS.md`. Use the domain-specific canonical docs and task lanes referenced by `AGENTS.md`. Do not invent cross-lane behavior or bypass contracts.

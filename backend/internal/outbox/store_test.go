@@ -41,8 +41,18 @@ func testStore(t *testing.T) (*Store, *pgxpool.Pool) {
 	return store, pool
 }
 
+func cleanupKey(t *testing.T, pool *pgxpool.Pool, key string) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(ctx, `DELETE FROM app.outbox_events WHERE idempotency_key=$1`, key)
+	})
+}
+
 func enqueueForTest(t *testing.T, store *Store, pool *pgxpool.Pool, key string) int64 {
 	t.Helper()
+	cleanupKey(t, pool, key)
 	ctx := context.Background()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -118,34 +128,37 @@ func TestOutboxRetryDeadLetterAndIdempotency(t *testing.T) {
 	}
 	_ = tx.Rollback(ctx)
 
-	claimed, err := store.Claim(ctx, "worker-a", 1, time.Second)
+	claimed, err := store.Claim(ctx, "worker-a", 1, time.Second, "test.event")
 	if err != nil || len(claimed) != 1 || claimed[0].ID != id {
 		t.Fatalf("claim = %#v, %v", claimed, err)
 	}
 	if err := store.Fail(ctx, id, "wrong-worker", errors.New("failure"), 2, time.Millisecond); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("wrong worker failure = %v, want ErrLeaseLost", err)
 	}
-	if err := store.Fail(ctx, id, "worker-a", errors.New("first failure"), 2, time.Millisecond); err != nil {
+	if err := store.Fail(ctx, id, "worker-a", errors.New("sensitive token in provider error"), 2, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	var status string
-	if err := pool.QueryRow(ctx, `SELECT status FROM app.outbox_events WHERE id=$1`, id).Scan(&status); err != nil {
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `SELECT status, last_error FROM app.outbox_events WHERE id=$1`, id).Scan(&status, &lastError); err != nil {
 		t.Fatal(err)
 	}
 	if status != "pending" {
 		t.Fatalf("status after retry = %q, want pending", status)
 	}
+	if lastError != "delivery failed" {
+		t.Fatalf("unsanitized failure: %q", lastError)
+	}
 	if _, err := pool.Exec(ctx, `UPDATE app.outbox_events SET available_at=now() WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err = store.Claim(ctx, "worker-a", 1, time.Second)
+	claimed, err = store.Claim(ctx, "worker-a", 1, time.Second, "test.event")
 	if err != nil || len(claimed) != 1 || claimed[0].Attempts != 2 {
 		t.Fatalf("second claim = %#v, %v", claimed, err)
 	}
 	if err := store.Fail(ctx, id, "worker-a", errors.New("exhausted"), 2, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	dead, err := store.DeadLetters(ctx, 10)
+	dead, err := store.DeadLetters(ctx, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,11 +177,11 @@ func TestClaimExcludesConcurrentWorkerAndCompleteNeedsOwner(t *testing.T) {
 	store, pool := testStore(t)
 	id := enqueueForTest(t, store, pool, "claim-test-"+time.Now().Format("20060102150405.000000000"))
 	ctx := context.Background()
-	first, err := store.Claim(ctx, "worker-a", 1, time.Second)
+	first, err := store.Claim(ctx, "worker-a", 1, time.Second, "test.event")
 	if err != nil || len(first) != 1 || first[0].ID != id {
 		t.Fatalf("first claim = %#v, %v", first, err)
 	}
-	second, err := store.Claim(ctx, "worker-b", 1, time.Second)
+	second, err := store.Claim(ctx, "worker-b", 1, time.Second, "test.event")
 	if err != nil || len(second) != 0 {
 		t.Fatalf("second claim = %#v, %v; want empty", second, err)
 	}
@@ -187,7 +200,7 @@ func TestRunnerProcessesSuccessAndSchedulesFailure(t *testing.T) {
 	failureID := enqueueForTest(t, store, pool, "runner-fail-"+time.Now().Format("20060102150405.000000000"))
 	runner := Runner{
 		Store: store, WorkerID: "runner", BatchSize: 10, Lease: time.Second,
-		MaxAttempts: 3, BaseBackoff: time.Millisecond,
+		MaxAttempts: 3, BaseBackoff: time.Millisecond, EventTypes: []string{"test.event"},
 		Handler: handlerFunc(func(_ context.Context, event Event) error {
 			if event.ID == failureID {
 				return errors.New("transient")
@@ -207,6 +220,18 @@ func TestRunnerProcessesSuccessAndSchedulesFailure(t *testing.T) {
 	}
 	if successStatus != "delivered" || failureStatus != "pending" {
 		t.Fatalf("statuses = (%q, %q), want (delivered, pending)", successStatus, failureStatus)
+	}
+}
+
+func TestClaimWithoutFilterIncludesEvents(t *testing.T) {
+	store, pool := testStore(t)
+	id := enqueueForTest(t, store, pool, "unfiltered-"+time.Now().Format("20060102150405.000000000"))
+	if _, err := pool.Exec(context.Background(), `UPDATE app.outbox_events SET available_at=now()-interval '1 day' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Claim(context.Background(), "unfiltered-worker", 1, time.Minute)
+	if err != nil || len(events) != 1 || events[0].ID != id {
+		t.Fatalf("unfiltered claim = %#v, %v", events, err)
 	}
 }
 
@@ -240,7 +265,7 @@ func TestExpiredLeaseCanBeReclaimedAndOldOwnerRejected(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE app.outbox_events SET available_at=now()-interval '1 second' WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := store.Claim(ctx, "worker-old", 10, time.Minute)
+	claimed, err := store.Claim(ctx, "worker-old", 10, time.Minute, "test.event")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +281,7 @@ func TestExpiredLeaseCanBeReclaimedAndOldOwnerRejected(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE app.outbox_events SET lease_until=now()-interval '1 second' WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.Claim(ctx, "worker-new", 1, time.Minute)
+	second, err := store.Claim(ctx, "worker-new", 1, time.Minute, "test.event")
 	if err != nil || len(second) != 1 || second[0].ID != id {
 		t.Fatalf("reclaim = %#v, %v", second, err)
 	}

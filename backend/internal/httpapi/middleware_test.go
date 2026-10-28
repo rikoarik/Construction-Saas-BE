@@ -77,17 +77,17 @@ func TestWriteErrorRedactsUnknownAndInvalidErrors(t *testing.T) {
 	}
 }
 
-func TestLoggingMiddlewareRedactsQueryAndLogsRequestID(t *testing.T) {
+func TestLoggingMiddlewareRedactsURLAndLogsRequestID(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&output, nil))
 	handler := RequestIDMiddleware(LoggingMiddleware(logger, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})))
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/projects?token=secret", nil))
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/auth/invitations/path-secret?token=query-secret", nil))
 
-	if strings.Contains(output.String(), "secret") {
-		t.Fatalf("log leaked query string: %s", output.String())
+	if strings.Contains(output.String(), "path-secret") || strings.Contains(output.String(), "query-secret") {
+		t.Fatalf("log leaked URL: %s", output.String())
 	}
 	if !strings.Contains(output.String(), w.Header().Get("X-Request-ID")) {
 		t.Fatalf("log missing request ID: %s", output.String())

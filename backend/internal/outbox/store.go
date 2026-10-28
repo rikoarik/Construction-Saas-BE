@@ -66,16 +66,24 @@ func (s *Store) Enqueue(ctx context.Context, tx pgx.Tx, companyID *string, event
 }
 
 // Claim claims a batch using SKIP LOCKED. Expired leases are eligible for reclaim.
-func (s *Store) Claim(ctx context.Context, worker string, limit int, lease time.Duration) ([]Event, error) {
+// When eventTypes is non-empty only those event types are claimed, which lets
+// deployments run dedicated workers per queue without starving each other.
+func (s *Store) Claim(ctx context.Context, worker string, limit int, lease time.Duration, eventTypes ...string) ([]Event, error) {
 	if worker == "" || limit < 1 || lease <= 0 {
 		return nil, fmt.Errorf("%w: worker, positive limit, and positive lease are required", ErrInvalid)
+	}
+	for _, eventType := range eventTypes {
+		if eventType == "" {
+			return nil, fmt.Errorf("%w: event types must not be empty", ErrInvalid)
+		}
 	}
 	rows, err := s.pool.Query(ctx, `
 		WITH candidates AS (
 			SELECT id
 			FROM app.outbox_events
-			WHERE (status = 'pending' AND available_at <= now())
-			   OR (status = 'processing' AND lease_until <= now())
+			WHERE ((status = 'pending' AND available_at <= now())
+			    OR (status = 'processing' AND lease_until <= now()))
+			  AND (COALESCE(cardinality($4::text[]), 0) = 0 OR event_type = ANY($4::text[]))
 			ORDER BY available_at, id
 			FOR UPDATE SKIP LOCKED
 			LIMIT $1
@@ -86,7 +94,7 @@ func (s *Store) Claim(ctx context.Context, worker string, limit int, lease time.
 		FROM candidates
 		WHERE event.id = candidates.id
 		RETURNING event.id, event.company_id::text, event.event_type, event.payload,
-		          event.idempotency_key, event.attempts, event.lease_owner`, limit, worker, lease.String())
+		          event.idempotency_key, event.attempts, event.lease_owner`, limit, worker, lease.String(), eventTypes)
 	if err != nil {
 		return nil, fmt.Errorf("claim outbox events: %w", err)
 	}
@@ -139,7 +147,7 @@ func (s *Store) Fail(ctx context.Context, id int64, worker string, cause error, 
 	if attempts >= maxAttempts {
 		tag, err = s.pool.Exec(ctx, `
 			UPDATE app.outbox_events SET status = 'dead', lease_owner = NULL, lease_until = NULL, last_error = $3
-			WHERE id = $1 AND status = 'processing' AND lease_owner = $2 AND lease_until > now()`, id, worker, cause.Error())
+			WHERE id = $1 AND status = 'processing' AND lease_owner = $2 AND lease_until > now()`, id, worker, "delivery failed")
 	} else {
 		backoff := baseBackoff
 		for i := 1; i < attempts && backoff < time.Minute; i++ {
@@ -155,7 +163,7 @@ func (s *Store) Fail(ctx context.Context, id int64, worker string, cause error, 
 		tag, err = s.pool.Exec(ctx, `
 				UPDATE app.outbox_events
 				SET status = 'pending', available_at = now() + $3::interval, lease_owner = NULL, lease_until = NULL, last_error = $4
-				WHERE id = $1 AND status = 'processing' AND lease_owner = $2 AND lease_until > now()`, id, worker, backoff.String(), cause.Error())
+				WHERE id = $1 AND status = 'processing' AND lease_owner = $2 AND lease_until > now()`, id, worker, backoff.String(), "delivery failed")
 	}
 	if err != nil {
 		return fmt.Errorf("fail outbox event: %w", err)

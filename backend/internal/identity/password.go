@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -22,6 +23,11 @@ const (
 	keyBytes                = 32
 	maxPasswordBytes        = 1 << 20
 )
+
+// ValidNewPassword checks the common password policy for all account flows.
+func ValidNewPassword(password string) bool {
+	return utf8.ValidString(password) && utf8.RuneCountInString(password) >= 8 && len(password) <= 1024
+}
 
 // PasswordHasher implements versioned Argon2id password encoding. The current
 // parameters are 19 MiB memory, 2 iterations, one lane, 16-byte salt, and a

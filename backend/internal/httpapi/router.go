@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // NewRouter creates the API router and optionally mounts the API handler.
@@ -14,8 +16,8 @@ func NewRouter(logger *slog.Logger, api http.Handler, security SecurityConfig) h
 	if logger == nil {
 		logger = slog.Default()
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux := chi.NewRouter()
+	mux.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -25,12 +27,13 @@ func NewRouter(logger *slog.Logger, api http.Handler, security SecurityConfig) h
 		if security.LoginLimit != nil {
 			limited := http.NewServeMux()
 			limited.Handle("/api/v1/auth/login", security.LoginLimit.Middleware("login", api))
+			limited.Handle("/api/v1/auth/change-password", security.LoginLimit.Middleware("change-password", api))
 			limited.Handle("/", api)
 			apiRoutes = limited
 		}
-		mux.Handle("/api/v1/", apiRoutes)
+		mux.Mount("/api/v1", apiRoutes)
 	}
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, &Error{Status: http.StatusNotFound, Code: "NOT_FOUND"})
 	})
 	var secured http.Handler = mux
@@ -41,7 +44,7 @@ func NewRouter(logger *slog.Logger, api http.Handler, security SecurityConfig) h
 		secured = security.APILimiter.Middleware("api", secured)
 	}
 	secured = SecurityHeaders(security.HTTPS, secured)
-	return RequestIDMiddleware(LoggingMiddleware(logger, secured))
+	return RequestIDMiddleware(LoggingMiddleware(logger, RecoverMiddleware(logger, secured)))
 }
 
 type SecurityConfig struct {

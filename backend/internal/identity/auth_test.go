@@ -53,8 +53,11 @@ func TestAuthIntegrationLoginCookieLogoutAndRevocation(t *testing.T) {
 		t.Fatalf("login errors differ: bad=%d %q unknown=%d %q", badPassword.Code, badPassword.Body.String(), unknownUser.Code, unknownUser.Body.String())
 	}
 	response := login(strings.ToUpper(user.Email), password)
-	if response.Code != http.StatusNoContent {
+	if response.Code != http.StatusOK {
 		t.Fatalf("login status = %d body=%s", response.Code, response.Body.String())
+	}
+	if got := strings.TrimSpace(response.Body.String()); got != `{"next":"authenticated"}` {
+		t.Fatalf("login body = %s", got)
 	}
 	cookies := response.Result().Cookies()
 	if len(cookies) != 1 {
@@ -104,7 +107,16 @@ func integrationIdentity(t *testing.T) (*Store, User) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		_, _ = pool.Exec(ctx, `DELETE FROM app.outbox_events e
+			USING app.auth_email_deliveries d
+			WHERE e.event_type='email.delivery'
+			  AND (e.payload->>'delivery_id')::uuid = d.id
+			  AND d.user_id=$1::uuid`, user.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM app.auth_email_deliveries WHERE user_id=$1::uuid`, user.ID)
 		_, _ = pool.Exec(ctx, `DELETE FROM app.auth_sessions WHERE user_id=$1::uuid`, user.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM app.company_memberships WHERE user_id=$1::uuid`, user.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM app.company_invitations WHERE created_by=$1::uuid`, user.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM app.platform_admins WHERE user_id=$1::uuid`, user.ID)
 		_, _ = pool.Exec(ctx, `DELETE FROM app.users WHERE id=$1::uuid`, user.ID)
 	})
 	return store, user

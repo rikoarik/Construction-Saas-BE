@@ -21,6 +21,144 @@ tags:
   - name: documents
   - name: telegram
 paths:
+  /platform/session:
+    get:
+      tags: [auth]
+      operationId: getPlatformSession
+      description: Requires an active platform grant and an MFA-verified session; it does not grant tenant access.
+      responses:
+        '200':
+          description: Verified platform access and capabilities.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authenticated, mfa_verified, capabilities]
+                properties:
+                  authenticated: { type: boolean, const: true }
+                  mfa_verified: { type: boolean, const: true }
+                  capabilities: { type: array, items: { type: string } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { description: Platform access is disabled until MFA is available. }
+  /auth/mfa/enrollment:
+    post:
+      tags: [auth]
+      operationId: startMfaEnrollment
+      description: Requires an MFA-pending platform session and CSRF token.
+      responses:
+        '200':
+          description: One-time TOTP enrollment secret.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [secret, otpauth_url, expires_at]
+                properties:
+                  secret: { type: string }
+                  otpauth_url: { type: string }
+                  expires_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/mfa/enrollment/confirm:
+    post:
+      tags: [auth]
+      operationId: confirmMfaEnrollment
+      requestBody: { $ref: '#/components/requestBodies/MfaCode' }
+      responses:
+        '200': { $ref: '#/components/responses/MfaResult' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /auth/mfa/challenge:
+    post:
+      tags: [auth]
+      operationId: challengeMfa
+      requestBody: { $ref: '#/components/requestBodies/MfaCode' }
+      responses:
+        '200': { $ref: '#/components/responses/MfaResult' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /auth/mfa/recovery:
+    post:
+      tags: [auth]
+      operationId: recoverMfa
+      requestBody: { $ref: '#/components/requestBodies/MfaCode' }
+      responses:
+        '200': { $ref: '#/components/responses/MfaResult' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /auth/forgot-password:
+    post:
+      tags: [auth]
+      operationId: forgotPassword
+      security: []
+      requestBody: { $ref: '#/components/requestBodies/EmailInput' }
+      responses:
+        '202': { description: Accepted regardless of account existence. }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/resend-verification:
+    post:
+      tags: [auth]
+      operationId: resendVerification
+      security: []
+      requestBody: { $ref: '#/components/requestBodies/EmailInput' }
+      responses:
+        '202': { description: Accepted regardless of account existence. }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/reset-password:
+    post:
+      tags: [auth]
+      operationId: resetPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token: { type: string }
+                new_password: { type: string, minLength: 8, maxLength: 1024, writeOnly: true }
+      responses:
+        '204': { description: Password changed and sessions revoked. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      operationId: verifyEmail
+      security: []
+      requestBody: { $ref: '#/components/requestBodies/TokenInput' }
+      responses:
+        '204': { description: Email verified. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /auth/invitations/accept:
+    post:
+      tags: [auth]
+      operationId: acceptInvitation
+      description: Existing accounts must authenticate as the invited user; new accounts require a password. No session is created.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+                password: { type: string, writeOnly: true }
+      responses:
+        '200':
+          description: Invitation accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted, user_id]
+                properties:
+                  accepted: { type: boolean, const: true }
+                  user_id: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /auth/login:
     post:
       tags: [auth]
@@ -37,11 +175,183 @@ paths:
                 email: { type: string, format: email }
                 password: { type: string, minLength: 1 }
       responses:
-        '204': { description: Authenticated session cookie established. }
+        '200':
+          description: Session established; platform administrators must complete the indicated MFA step.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [next]
+                properties:
+                  next: { type: string, enum: [authenticated, mfa_required, mfa_enrollment_required] }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: refreshSession
+      description: Rotate an active session token without extending its absolute expiration. Requires a session-bound CSRF token.
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Session cookie rotated; the old token is invalid. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: getCurrentUser
+      description: Current account for an active session. MFA-pending sessions are denied.
+      responses:
+        '200':
+          description: Current account
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, email]
+                properties:
+                  id: { type: string, format: uuid }
+                  email: { type: string, format: email }
+                  selected_company:
+                    oneOf:
+                      - type: 'null'
+                      - type: object
+                        required: [id, name, role]
+                        properties:
+                          id: { type: string, format: uuid }
+                          name: { type: string }
+                          role: { type: string }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/sessions:
+    get:
+      tags: [auth]
+      operationId: listSessions
+      responses:
+        '200':
+          description: Active sessions belonging to the current user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, created_at, expires_at, current]
+                      properties:
+                        id: { type: string, format: uuid }
+                        created_at: { type: string, format: date-time }
+                        expires_at: { type: string, format: date-time }
+                        current: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/sessions/{id}:
+    delete:
+      tags: [auth]
+      operationId: revokeSession
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Session revoked. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Session not found. }
+  /auth/companies:
+    get:
+      tags: [auth]
+      operationId: listMyCompanies
+      responses:
+        '200':
+          description: Active companies for which the user has active membership.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [companies]
+                properties:
+                  companies:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, role]
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        role: { type: string }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/companies/select:
+    post:
+      tags: [auth]
+      operationId: selectCompany
+      description: Select an active company membership for this session. Selection is not a grant; authorization must be checked on each request.
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [company_id]
+              properties:
+                company_id: { type: string, format: uuid }
+      responses:
+        '204': { description: Company selected. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/change-password:
+    post:
+      tags: [auth]
+      operationId: changePassword
+      description: Requires the current password and a session-bound CSRF token. On success all sessions are revoked and the cookie is cleared.
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, writeOnly: true }
+                new_password: { type: string, writeOnly: true, minLength: 8, maxLength: 1024 }
+      responses:
+        '204': { description: Password changed; all sessions revoked. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/logout-all:
+    post:
+      tags: [auth]
+      operationId: logoutAll
+      responses:
+        '204': { description: All sessions revoked and current cookie cleared. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /auth/logout:
     post:
       tags: [auth]
@@ -56,7 +366,7 @@ paths:
       operationId: getCsrfToken
       responses:
         '200':
-          description: Session-bound token for unsafe cookie-authenticated requests; response is no-store.
+          description: Session-bound token for an active or MFA-pending session, or a pre-authentication double-submit token for anonymous requests; response is no-store.
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
           content:
@@ -118,7 +428,7 @@ paths:
                 role: { type: string, enum: [admin, member, viewer] }
       responses:
         '201':
-          description: Company-scoped invitation created; plaintext token is returned once.
+          description: Company-scoped invitation created; the token is delivered by email, not returned.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Invitation' }
@@ -129,34 +439,65 @@ paths:
     get:
       tags: [companies]
       operationId: listCompanyInvitations
-      parameters:
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
       responses:
         '200':
-          description: Scoped invitation listing for company owners and administrators.
+          description: Scoped invitation listing for authorized company members.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InvitationPage' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /companies/{companyId}/invitations/{invitationId}:
+    parameters:
+      - $ref: '#/components/parameters/CompanyId'
+      - in: path
+        name: invitationId
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [companies]
+      operationId: revokeInvitation
+      responses:
+        '204': { description: Invitation revoked. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /companies/{companyId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/CompanyId'
+      - in: path
+        name: userId
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [companies]
+      operationId: updateMembership
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [admin, member, viewer] }
+                status: { type: string, enum: [active, suspended, removed] }
+      responses:
+        '204': { description: Membership updated. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /companies/{companyId}/members:
     parameters:
       - $ref: '#/components/parameters/CompanyId'
     get:
       tags: [companies]
       operationId: listCompanyMembers
-      parameters:
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
       responses:
         '200':
-          description: Scoped company member page; requires owner or admin role.
+          description: Scoped company members; requires member.read capability.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MemberPage' }
@@ -564,6 +905,34 @@ paths:
         '413': { description: Request body exceeds configured maximum. }
         '422': { $ref: '#/components/responses/ValidationError' }
 components:
+  requestBodies:
+    EmailInput:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [email]
+            properties:
+              email: { type: string, format: email }
+    TokenInput:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [token]
+            properties:
+              token: { type: string }
+    MfaCode:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code]
+            properties:
+              code: { type: string, minLength: 1, maxLength: 64 }
   securitySchemes:
     sessionCookie:
       type: apiKey
@@ -638,35 +1007,33 @@ components:
         next_cursor: { type: [string, 'null'] }
     Member:
       type: object
-      required: [user_id, email, role, status, created_at]
+      required: [user_id, email, role, status, created_at, updated_at]
       properties:
         user_id: { type: string, format: uuid }
         email: { type: string, format: email }
         role: { type: string, enum: [owner, admin, member, viewer] }
         status: { type: string, enum: [active, suspended, removed] }
         created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     MemberPage:
       type: object
-      required: [items, next_cursor]
+      required: [members]
       properties:
-        items: { type: array, items: { $ref: '#/components/schemas/Member' } }
-        next_cursor: { type: [string, 'null'] }
+        members: { type: array, items: { $ref: '#/components/schemas/Member' } }
     Invitation:
       type: object
-      required: [id, company_id, email, role, expires_at, token]
+      required: [id, email, role, expires_at, created_at]
       properties:
         id: { type: string, format: uuid }
-        company_id: { type: string, format: uuid }
         email: { type: string, format: email }
         role: { type: string, enum: [admin, member, viewer] }
         expires_at: { type: string, format: date-time }
-        token: { type: string, writeOnly: true }
+        created_at: { type: string, format: date-time }
     InvitationPage:
       type: object
-      required: [items, next_cursor]
+      required: [invitations]
       properties:
-        items: { type: array, items: { $ref: '#/components/schemas/Invitation' } }
-        next_cursor: { type: [string, 'null'] }
+        invitations: { type: array, items: { $ref: '#/components/schemas/Invitation' } }
     Page:
       type: object
       required: [items]
@@ -703,6 +1070,16 @@ components:
           enum: [VALIDATION_ERROR, UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, BUSINESS_RULE_VIOLATION, RATE_LIMITED, INTERNAL_ERROR]
         params: { type: object, additionalProperties: true }
   responses:
+    MfaResult:
+      description: MFA completed and session cookie rotated. Enrollment returns recovery codes once.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [expires_at]
+            properties:
+              expires_at: { type: string, format: date-time }
+              recovery_codes: { type: array, items: { type: string } }
     ValidationError:
       description: Request failed validation.
       content:

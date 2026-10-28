@@ -85,7 +85,7 @@ func TestIdentityQueriesPostgres(t *testing.T) {
 	}
 
 	rawToken := "raw-session-token-that-must-not-be-persisted"
-	tokenHash := "sha256:0123456789abcdef"
+	tokenHash := sessionTokenHash("test-session:" + email)
 	session, err := store.CreateSession(ctx, user.ID, tokenHash, time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("create session: %v", err)

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,12 +13,13 @@ func TestCSRFMiddlewareRejectsMissingAndWrongTokenAndAllowsMatchingToken(t *test
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	resolver := sessionResolverFunc(func(*http.Request) (string, error) { return "session-1", nil })
 	called := 0
-	handler := CSRFMiddleware("session", secret, resolver, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := CSRFMiddleware("session", secret, resolver, map[string]struct{}{"https://app.example.test": {}}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called++
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	for _, token := range []string{"", "invalid"} {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/resource", nil)
+		req.Header.Set("Origin", "https://app.example.test")
 		req.AddCookie(&http.Cookie{Name: "session", Value: "opaque"})
 		if token != "" {
 			req.Header.Set(CSRFHeader, token)
@@ -32,6 +34,7 @@ func TestCSRFMiddlewareRejectsMissingAndWrongTokenAndAllowsMatchingToken(t *test
 		t.Fatalf("handler called %d times on CSRF rejection", called)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/resource", nil)
+	req.Header.Set("Origin", "https://app.example.test")
 	req.AddCookie(&http.Cookie{Name: "session", Value: "opaque"})
 	req.Header.Set(CSRFHeader, csrfValue(secret, "session-1"))
 	res := httptest.NewRecorder()
@@ -57,6 +60,8 @@ func TestCSRFMiddlewareProtectsLogoutAndChecksLoginOrigin(t *testing.T) {
 		t.Fatalf("cross-origin login status = %d, want 403", res.Code)
 	}
 	login.Header.Set("Origin", "https://app.example.test")
+	login.Header.Set(CSRFHeader, "preauth-token")
+	login.AddCookie(&http.Cookie{Name: PreAuthCSRFCookie, Value: "preauth-token"})
 	res = httptest.NewRecorder()
 	handler.ServeHTTP(res, login)
 	if res.Code != http.StatusNoContent {
@@ -144,5 +149,45 @@ func TestSecurityHeadersCoverErrorResponsesAndHSTSOptIn(t *testing.T) {
 	SecurityHeaders(false, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })).ServeHTTP(plain, httptest.NewRequest(http.MethodGet, "/", nil))
 	if plain.Header().Get("Strict-Transport-Security") != "" {
 		t.Fatal("HSTS emitted without HTTPS deployment flag")
+	}
+}
+
+func TestPreAuthCSRFBootstrapUsesDoubleSubmitCookie(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	handler := CSRFMiddleware("session", secret, nil, map[string]struct{}{"https://app.example.test": {}},
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+
+	bootstrap := httptest.NewRecorder()
+	handler.ServeHTTP(bootstrap, httptest.NewRequest(http.MethodGet, CSRFTokenPath, nil))
+	if bootstrap.Code != http.StatusOK {
+		t.Fatalf("bootstrap = %d %s", bootstrap.Code, bootstrap.Body.String())
+	}
+	var body struct {
+		Token string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(bootstrap.Body.Bytes(), &body); err != nil || body.Token == "" {
+		t.Fatalf("bootstrap body = %s", bootstrap.Body.String())
+	}
+	cookies := bootstrap.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != PreAuthCSRFCookie || cookies[0].HttpOnly || cookies[0].Value != body.Token {
+		t.Fatalf("pre-auth cookie = %+v", cookies)
+	}
+
+	post := func(token string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+		req.Header.Set("Origin", "https://app.example.test")
+		req.AddCookie(cookies[0])
+		if token != "" {
+			req.Header.Set(CSRFHeader, token)
+		}
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		return res.Code
+	}
+	if code := post(""); code != http.StatusForbidden {
+		t.Fatalf("missing pre-auth token = %d", code)
+	}
+	if code := post(body.Token); code != http.StatusNoContent {
+		t.Fatalf("valid pre-auth token = %d", code)
 	}
 }

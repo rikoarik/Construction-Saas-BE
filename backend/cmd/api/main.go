@@ -43,9 +43,55 @@ func main() {
 		logger.Error("create identity store", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	authService := &identity.AuthService{Store: identityStore, Logger: logger}
+	production := os.Getenv("APP_ENV") == "production"
+	authService := &identity.AuthService{
+		Store:     identityStore,
+		Logger:    logger,
+		PublicURL: os.Getenv("APP_PUBLIC_URL"),
+	}
+	if value := os.Getenv("MFA_ENCRYPTION_KEY"); value != "" {
+		key, err := identity.ParseSecretKey(value)
+		if err != nil {
+			logger.Error("parse MFA_ENCRYPTION_KEY", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		authService.MFAKey = key
+	} else if production {
+		logger.Error("MFA_ENCRYPTION_KEY is required in production")
+		os.Exit(1)
+	}
+	if value := os.Getenv("EMAIL_ENCRYPTION_KEY"); value != "" {
+		key, err := identity.ParseSecretKey(value)
+		if err != nil {
+			logger.Error("parse EMAIL_ENCRYPTION_KEY", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		authService.EmailKey = key
+	} else {
+		authService.EmailKey = authService.MFAKey
+	}
+	if production && authService.PublicURL == "" {
+		logger.Error("APP_PUBLIC_URL is required in production")
+		os.Exit(1)
+	}
+	if value := os.Getenv("METADATA_HMAC_KEY"); value != "" {
+		key, err := identity.ParseSecretKey(value)
+		if err != nil {
+			logger.Error("parse METADATA_HMAC_KEY", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		authService.MetadataKey = key
+	} else {
+		authService.MetadataKey = authService.MFAKey
+	}
+	authLimiter, err := identity.NewAuthRateLimiter(pool, authService.MetadataKey)
+	if err != nil {
+		logger.Error("create auth rate limiter", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	authService.RateLimiter = authLimiter
 	authMux := http.NewServeMux()
-	identity.RegisterAuthRoutes(authMux, authService, os.Getenv("APP_ENV") == "production")
+	identity.RegisterAuthRoutes(authMux, authService, production)
 	csrfConfig, err := securityCSRFConfig(authService)
 	if err != nil {
 		logger.Error("configure CSRF", slog.String("error", err.Error()))
@@ -61,12 +107,12 @@ func main() {
 		logger.Error("configure API rate limit", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	security := httpapi.SecurityConfig{CSRF: csrfConfig, LoginLimit: loginLimiter, APILimiter: apiLimiter, HTTPS: os.Getenv("APP_ENV") == "production"}
+	security := httpapi.SecurityConfig{CSRF: csrfConfig, LoginLimit: loginLimiter, APILimiter: apiLimiter, HTTPS: production}
 	addr := os.Getenv("API_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
-	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(logger, authMux, security), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(logger, authMux, security), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -91,7 +137,9 @@ func (r authSessionResolver) ResolveSessionID(request *http.Request) (string, er
 	if err != nil {
 		return "", err
 	}
-	return session.ID, nil
+	// Bind the CSRF token to the current bearer hash as well as the session ID.
+	// Rotating the bearer therefore invalidates previously issued CSRF tokens.
+	return session.ID + ":" + session.TokenHash, nil
 }
 func securityCSRFConfig(service *identity.AuthService) (httpapi.CSRFConfig, error) {
 	secret := os.Getenv("CSRF_SECRET")
@@ -110,6 +158,9 @@ func securityCSRFConfig(service *identity.AuthService) (httpapi.CSRFConfig, erro
 		if origin != "" {
 			origins[origin] = struct{}{}
 		}
+	}
+	if os.Getenv("APP_ENV") == "production" && len(origins) == 0 {
+		return httpapi.CSRFConfig{}, errors.New("TRUSTED_ORIGINS is required in production")
 	}
 	return httpapi.CSRFConfig{Enabled: true, SessionCookie: identity.SessionCookieName, Secret: []byte(secret), Resolver: authSessionResolver{service: service}, TrustedOrigins: origins}, nil
 }

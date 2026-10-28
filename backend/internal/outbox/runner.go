@@ -24,6 +24,8 @@ type Runner struct {
 	PollInterval time.Duration
 	MaxAttempts  int
 	BaseBackoff  time.Duration
+	// EventTypes restricts the batch to specific event types. Empty means all.
+	EventTypes []string
 }
 
 func (r *Runner) Run(ctx context.Context) error {
@@ -49,7 +51,7 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) ProcessBatch(ctx context.Context) error {
-	events, err := r.Store.Claim(ctx, r.WorkerID, r.BatchSize, r.Lease)
+	events, err := r.Store.Claim(ctx, r.WorkerID, r.BatchSize, r.Lease, r.EventTypes...)
 	if err != nil {
 		return err
 	}

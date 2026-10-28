@@ -60,6 +60,8 @@ func TestRouterSecurityMiddlewareIsComposed(t *testing.T) {
 	}
 	secondReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 	secondReq.Header.Set("Origin", "https://app.example.test")
+	secondReq.Header.Set(CSRFHeader, "preauth-token")
+	secondReq.AddCookie(&http.Cookie{Name: PreAuthCSRFCookie, Value: "preauth-token"})
 	second := httptest.NewRecorder()
 	handler.ServeHTTP(second, secondReq)
 	if second.Code != http.StatusNoContent {
@@ -67,6 +69,8 @@ func TestRouterSecurityMiddlewareIsComposed(t *testing.T) {
 	}
 	thirdReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 	thirdReq.Header.Set("Origin", "https://app.example.test")
+	thirdReq.Header.Set(CSRFHeader, "preauth-token")
+	thirdReq.AddCookie(&http.Cookie{Name: PreAuthCSRFCookie, Value: "preauth-token"})
 	third := httptest.NewRecorder()
 	handler.ServeHTTP(third, thirdReq)
 	if third.Code != http.StatusTooManyRequests || !strings.Contains(third.Body.String(), "RATE_LIMITED") {

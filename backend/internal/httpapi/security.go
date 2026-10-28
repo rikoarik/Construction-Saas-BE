@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	CSRFTokenPath = "/api/v1/auth/csrf"
-	CSRFHeader    = "X-CSRF-Token"
+	CSRFTokenPath     = "/api/v1/auth/csrf"
+	CSRFHeader        = "X-CSRF-Token"
+	PreAuthCSRFCookie = "csrf_preauth"
 )
 
 type SessionResolver interface {
@@ -46,31 +47,62 @@ func csrfValue(secret []byte, sessionID string) string {
 func CSRFMiddleware(sessionCookie string, secret []byte, resolver SessionResolver, trustedOrigins map[string]struct{}, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == CSRFTokenPath && r.Method == http.MethodGet {
-			if resolver == nil || len(secret) < 32 {
+			if len(secret) < 32 {
 				WriteError(w, r, &Error{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR"})
-				return
-			}
-			sessionID, err := resolver.ResolveSessionID(r)
-			if err != nil || sessionID == "" {
-				WriteError(w, r, &Error{Status: http.StatusUnauthorized, Code: "UNAUTHENTICATED"})
 				return
 			}
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]string{"csrf_token": csrfValue(secret, sessionID)})
+			w.Header().Add("Vary", "Cookie")
+			// A live session gets a token bound to the session ID and current
+			// bearer hash. Anonymous callers get a double-submit token that
+			// protects pre-authentication mutations such as login.
+			if sessionCookie != "" && resolver != nil {
+				if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
+					if sessionID, err := resolver.ResolveSessionID(r); err == nil && sessionID != "" {
+						_, _ = w.Write(mustJSON(map[string]string{"csrf_token": csrfValue(secret, sessionID)}))
+						return
+					}
+				}
+			}
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err != nil {
+				WriteError(w, r, &Error{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR"})
+				return
+			}
+			token := base64.RawURLEncoding.EncodeToString(raw)
+			http.SetCookie(w, &http.Cookie{
+				Name: PreAuthCSRFCookie, Value: token, Path: "/",
+				HttpOnly: false, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
+			})
+			_, _ = w.Write(mustJSON(map[string]string{"csrf_token": token}))
 			return
 		}
-		if r.URL.Path == "/api/v1/auth/login" && isUnsafeMethod(r.Method) && !sameOriginRequest(r, trustedOrigins) {
+		if isUnsafeMethod(r.Method) && strings.HasPrefix(r.URL.Path, "/api/v1/") && !sameOriginRequest(r, trustedOrigins) {
 			WriteError(w, r, &Error{Status: http.StatusForbidden, Code: "FORBIDDEN"})
 			return
 		}
-		if isUnsafeMethod(r.Method) && sessionCookie != "" {
-			if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
-				sessionID, resolveErr := "", errors.New("session resolver unavailable")
-				if resolver != nil {
-					sessionID, resolveErr = resolver.ResolveSessionID(r)
+		if isUnsafeMethod(r.Method) && strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			if len(secret) < 32 {
+				WriteError(w, r, &Error{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR"})
+				return
+			}
+			provided := r.Header.Get(CSRFHeader)
+			bound := false
+			if sessionCookie != "" && resolver != nil {
+				if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
+					if sessionID, err := resolver.ResolveSessionID(r); err == nil && sessionID != "" {
+						bound = true
+						if !validCSRFToken(secret, sessionID, provided) {
+							WriteError(w, r, &Error{Status: http.StatusForbidden, Code: "FORBIDDEN"})
+							return
+						}
+					}
 				}
-				if resolveErr != nil || sessionID == "" || len(secret) < 32 || !validCSRFToken(secret, sessionID, r.Header.Get(CSRFHeader)) {
+			}
+			if !bound {
+				cookie, err := r.Cookie(PreAuthCSRFCookie)
+				if err != nil || cookie.Value == "" || !constantTimeEqual(cookie.Value, provided) {
 					WriteError(w, r, &Error{Status: http.StatusForbidden, Code: "FORBIDDEN"})
 					return
 				}
@@ -78,6 +110,21 @@ func CSRFMiddleware(sessionCookie string, secret []byte, resolver SessionResolve
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func constantTimeEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return hmac.Equal([]byte(a), []byte(b))
+}
+
+func mustJSON(value any) []byte {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return []byte("{}")
+	}
+	return encoded
 }
 
 func sameOriginRequest(r *http.Request, allowed map[string]struct{}) bool {
