@@ -16,8 +16,6 @@ import (
 	"construction-saas/backend/internal/database"
 	"construction-saas/backend/internal/httpapi"
 	"construction-saas/backend/internal/identity"
-	"construction-saas/backend/internal/projects"
-	"construction-saas/backend/internal/tenancy"
 )
 
 func main() {
@@ -45,21 +43,9 @@ func main() {
 		logger.Error("create identity store", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	tenancyStore, err := tenancy.NewStore(pool)
-	if err != nil {
-		logger.Error("create tenancy store", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
-	authorizer, err := projects.NewAuthorizer(pool)
-	if err != nil {
-		logger.Error("create project authorizer", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
-	_ = authorizer // Project endpoints receive this engine as their API tasks land.
 	authService := &identity.AuthService{Store: identityStore, Logger: logger}
 	authMux := http.NewServeMux()
 	identity.RegisterAuthRoutes(authMux, authService, os.Getenv("APP_ENV") == "production")
-	(&tenancy.Handler{Store: tenancyStore, Auth: authService}).Register(authMux)
 	csrfConfig, err := securityCSRFConfig(authService)
 	if err != nil {
 		logger.Error("configure CSRF", slog.String("error", err.Error()))

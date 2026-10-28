@@ -5,6 +5,8 @@ info:
   description: >-
     Machine-readable representation of the proposed API contract. This describes
     intended behavior; it does not imply that endpoints are implemented.
+    Company administration and project authorization were removed from the
+    current backend; their draft paths are not available.
 servers:
   - url: https://api.example.invalid/api/v1
     description: Placeholder; replace before deployment.

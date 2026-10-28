@@ -1,6 +1,6 @@
 # REST API Contract — Human-Readable Draft
 
-**Status:** Proposed; future executable source: `api/openapi.yaml` + generated API client.  
+**Status:** Proposed; future executable source: `api/openapi.yaml` + generated API client. Company administration, project authorization, and membership-dependent notifications are not implemented in the current backend and require redesign before use.  
 **Owner:** Go Backend · **Root:** `/api/v1` · **Transport:** JSON over HTTPS, multipart/form-data only when approved.  
 **See:** [System Design](../architecture/SYSTEM-DESIGN.md), [State Machines](STATE-MACHINES.md)
 

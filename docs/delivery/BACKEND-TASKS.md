@@ -2,6 +2,8 @@
 
 **Owner:** backend lane · **Status:** planned unless repository evidence says otherwise
 
+Company administration, project authorization, and membership-dependent notification implementation were removed for a fresh start. Any earlier task evidence referring to those implementations is historical and must be revalidated before marking them complete.
+
 This backlog covers the complete product architecture. Delivery is phased only to control dependencies and parallel execution.
 
 Status: `planned -> contract_ready -> in_progress -> in_review -> verified -> released` (use `blocked` when required). Every task must link implementation evidence and tests before `verified`.
