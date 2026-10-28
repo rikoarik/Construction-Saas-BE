@@ -138,15 +138,15 @@ func TestOutboxRetryDeadLetterAndIdempotency(t *testing.T) {
 	if err := store.Fail(ctx, id, "worker-a", errors.New("sensitive token in provider error"), 2, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	var status, lastError string
-	if err := pool.QueryRow(ctx, `SELECT status, last_error FROM app.outbox_events WHERE id=$1`, id).Scan(&status, &lastError); err != nil {
+	var status, lastError, errorCode string
+	if err := pool.QueryRow(ctx, `SELECT status, last_error, error_code FROM app.outbox_events WHERE id=$1`, id).Scan(&status, &lastError, &errorCode); err != nil {
 		t.Fatal(err)
 	}
 	if status != "pending" {
 		t.Fatalf("status after retry = %q, want pending", status)
 	}
-	if lastError != "delivery failed" {
-		t.Fatalf("unsanitized failure: %q", lastError)
+	if lastError != "delivery failed" || errorCode != "JOB_EXECUTION_FAILED" {
+		t.Fatalf("unsanitized failure or missing safe code: %q %q", lastError, errorCode)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE app.outbox_events SET available_at=now() WHERE id=$1`, id); err != nil {
 		t.Fatal(err)

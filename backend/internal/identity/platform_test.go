@@ -8,6 +8,45 @@ import (
 	"time"
 )
 
+func TestLegacySuperadminReceivesRoleCapabilitiesWithoutTenantAccess(t *testing.T) {
+	store, user := integrationIdentity(t)
+	ctx := context.Background()
+	if _, err := store.pool.Exec(ctx, `INSERT INTO app.platform_admins (user_id) VALUES ($1::uuid)`, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := store.PlatformCapabilities(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"platform.access", "platform.dashboard.read", "platform.company.read", "platform.company.create", "platform.member.read"} {
+		found := false
+		for _, capability := range capabilities {
+			if capability == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("legacy superadmin missing %s: %v", required, capabilities)
+		}
+	}
+	for _, capability := range capabilities {
+		if capability == "company.read" || capability == "project.read" {
+			t.Errorf("platform grant must not imply tenant capability %s", capability)
+		}
+	}
+	if _, err := store.pool.Exec(ctx, `DELETE FROM app.platform_admins WHERE user_id=$1::uuid`, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err = store.PlatformCapabilities(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capabilities) != 0 {
+		t.Errorf("revoked legacy grant still has capabilities: %v", capabilities)
+	}
+}
+
 func TestPlatformSessionMissingCookie(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterAuthRoutes(mux, &AuthService{}, false)

@@ -119,7 +119,7 @@ func (s *Store) Claim(ctx context.Context, worker string, limit int, lease time.
 func (s *Store) Complete(ctx context.Context, id int64, worker string) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE app.outbox_events
-		SET status = 'delivered', delivered_at = now(), lease_owner = NULL, lease_until = NULL, last_error = NULL
+		SET status = 'delivered', delivered_at = now(), lease_owner = NULL, lease_until = NULL, last_error = NULL, error_code = NULL
 		WHERE id = $1 AND status = 'processing' AND lease_owner = $2 AND lease_until > now()`, id, worker)
 	if err != nil {
 		return fmt.Errorf("complete outbox event: %w", err)
@@ -146,7 +146,7 @@ func (s *Store) Fail(ctx context.Context, id int64, worker string, cause error, 
 	var tag pgconn.CommandTag
 	if attempts >= maxAttempts {
 		tag, err = s.pool.Exec(ctx, `
-			UPDATE app.outbox_events SET status = 'dead', lease_owner = NULL, lease_until = NULL, last_error = $3
+			UPDATE app.outbox_events SET status = 'dead', lease_owner = NULL, lease_until = NULL, last_error = $3, last_failed_at = now(), error_code = 'JOB_EXECUTION_FAILED'
 			WHERE id = $1 AND status = 'processing' AND lease_owner = $2 AND lease_until > now()`, id, worker, "delivery failed")
 	} else {
 		backoff := baseBackoff
@@ -162,7 +162,7 @@ func (s *Store) Fail(ctx context.Context, id int64, worker string, cause error, 
 		}
 		tag, err = s.pool.Exec(ctx, `
 				UPDATE app.outbox_events
-				SET status = 'pending', available_at = now() + $3::interval, lease_owner = NULL, lease_until = NULL, last_error = $4
+				SET status = 'pending', available_at = now() + $3::interval, lease_owner = NULL, lease_until = NULL, last_error = $4, last_failed_at = now(), error_code = 'JOB_EXECUTION_FAILED'
 				WHERE id = $1 AND status = 'processing' AND lease_owner = $2 AND lease_until > now()`, id, worker, backoff.String(), "delivery failed")
 	}
 	if err != nil {

@@ -137,7 +137,7 @@ func (s *AuthService) InviteMember(ctx context.Context, actorID, companyID, emai
 	if err != nil {
 		return Invitation{}, err
 	}
-	ciphertext, nonce, err := box.Encrypt([]byte(token), "tenant-invitation-v1:"+normalized)
+	ciphertext, nonce, err := box.Encrypt([]byte(token), emailTokenAAD("company_invitation", ""))
 	if err != nil {
 		return Invitation{}, err
 	}
@@ -176,6 +176,12 @@ func (s *AuthService) InviteMember(ctx context.Context, actorID, companyID, emai
 	}
 	if existing {
 		return Invitation{}, ErrInvitationExists
+	}
+	// Keep the database partial unique index usable after a pending link expires.
+	if _, err := tx.Exec(ctx, `UPDATE app.company_invitations SET revoked_at=now(),updated_at=now()
+		WHERE company_id=$1::uuid AND email_normalized=$2 AND accepted_at IS NULL
+		AND revoked_at IS NULL AND expires_at<=now()`, companyID, normalized); err != nil {
+		return Invitation{}, err
 	}
 	var invitation Invitation
 	err = tx.QueryRow(ctx, `
@@ -296,6 +302,23 @@ func (s *AuthService) AcceptInvitation(ctx context.Context, token, password stri
 		role         string
 		expiresAt    time.Time
 	)
+	// Lock company before invitation, matching platform administrative mutations.
+	if err := tx.QueryRow(ctx, `SELECT company_id::text FROM app.company_invitations WHERE token_hash=$1`, tokenDigest(token)).Scan(&companyID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrInvitationInvalid
+		}
+		return User{}, err
+	}
+	var companyStatus string
+	if err := tx.QueryRow(ctx, `SELECT status FROM app.companies WHERE id=$1::uuid FOR UPDATE`, companyID).Scan(&companyStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrInvitationInvalid
+		}
+		return User{}, err
+	}
+	if companyStatus != "active" && companyStatus != "provisioning" {
+		return User{}, ErrInvitationInvalid
+	}
 	err = tx.QueryRow(ctx, `
 		SELECT id::text,company_id::text,email,email_normalized,role,expires_at
 		FROM app.company_invitations
@@ -311,10 +334,11 @@ func (s *AuthService) AcceptInvitation(ctx context.Context, token, password stri
 	if !expiresAt.After(time.Now()) {
 		return User{}, ErrInvitationInvalid
 	}
-	var companyActive bool
-	if err := tx.QueryRow(ctx, `SELECT status='active' FROM app.companies WHERE id=$1::uuid FOR SHARE`, companyID).Scan(&companyActive); err != nil || !companyActive {
+	if companyStatus == "provisioning" && role != "admin" {
 		return User{}, ErrInvitationInvalid
 	}
+	// A newly provisioned workspace becomes active only when its first admin
+	// accepts; no tenant content is reachable while it is provisioning.
 
 	var user User
 	err = tx.QueryRow(ctx, `
@@ -388,6 +412,19 @@ func (s *AuthService) AcceptInvitation(ctx context.Context, token, password stri
 		WHERE id=$1::uuid AND accepted_at IS NULL AND revoked_at IS NULL`, invitationID, user.ID)
 	if err != nil || tag.RowsAffected() != 1 {
 		return User{}, ErrInvitationInvalid
+	}
+	if companyStatus == "provisioning" {
+		if _, err := tx.Exec(ctx, `UPDATE app.companies SET status='active',access_version=access_version+1,updated_at=now() WHERE id=$1::uuid`, companyID); err != nil {
+			return User{}, err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO app.audit_logs(company_id,actor_id,action,entity_type,entity_id,metadata_json)
+			VALUES($1::uuid,$2::uuid,'company.activated','company',$1::uuid,'{}'::jsonb)`, companyID, user.ID); err != nil {
+			return User{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO app.audit_logs(company_id,actor_id,action,entity_type,entity_id,metadata_json)
+		VALUES($1::uuid,$2::uuid,'company.invitation_accepted','company_invitation',$3::uuid,'{}'::jsonb)`, companyID, user.ID, invitationID); err != nil {
+		return User{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO app.security_events (user_id,event_type,metadata)
 		VALUES ($1::uuid,'tenant.invitation_accepted',jsonb_build_object('company_id',$2::text))`,

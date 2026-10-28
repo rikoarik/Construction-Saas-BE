@@ -213,8 +213,10 @@ func (s *Store) PlatformCapabilities(ctx context.Context, userID string) ([]stri
 			JOIN app.platform_role_capabilities rc ON rc.role_code = a.role_code
 			WHERE a.user_id = $1::uuid AND a.revoked_at IS NULL
 			UNION ALL
-			SELECT unnest(ARRAY['platform.access', 'platform.roles.manage'])
-			WHERE EXISTS (SELECT 1 FROM app.platform_admins pa WHERE pa.user_id = $1::uuid)
+			SELECT rc.capability_code
+			FROM app.platform_role_capabilities rc
+			WHERE rc.role_code = 'superadmin'
+			  AND EXISTS (SELECT 1 FROM app.platform_admins pa WHERE pa.user_id = $1::uuid)
 		) grants
 		WHERE EXISTS (
 			SELECT 1 FROM app.users u WHERE u.id = $1::uuid AND u.status = 'active'

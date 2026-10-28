@@ -59,7 +59,7 @@ func (h *EmailDeliveryHandler) Handle(ctx context.Context, event outbox.Event) e
 	}
 	var (
 		recipient   string
-		userID      string
+		userID      *string
 		template    string
 		ciphertext  []byte
 		nonce       []byte
@@ -84,7 +84,31 @@ func (h *EmailDeliveryHandler) Handle(ctx context.Context, event outbox.Event) e
 		// retrying forever.
 		return h.clearSecret(ctx, payload.DeliveryID)
 	}
-	raw, err := h.Box.Decrypt(ciphertext, nonce, emailTokenAAD(template, userID))
+	if template == "company_invitation" {
+		var managed bool
+		if err := h.Store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM app.company_invitations WHERE delivery_id=$1::uuid)`, payload.DeliveryID).Scan(&managed); err != nil {
+			return err
+		}
+		if managed {
+			var valid bool
+			err := h.Store.pool.QueryRow(ctx, `SELECT EXISTS (
+				SELECT 1 FROM app.company_invitations i JOIN app.companies c ON c.id=i.company_id
+				WHERE i.delivery_id=$1::uuid AND i.accepted_at IS NULL AND i.revoked_at IS NULL
+				AND i.expires_at>now() AND c.status IN ('active','provisioning')
+			)`, payload.DeliveryID).Scan(&valid)
+			if err != nil {
+				return err
+			}
+			if !valid {
+				return h.clearSecret(ctx, payload.DeliveryID)
+			}
+		}
+	}
+	aadUserID := ""
+	if userID != nil {
+		aadUserID = *userID
+	}
+	raw, err := h.Box.Decrypt(ciphertext, nonce, emailTokenAAD(template, aadUserID))
 	if err != nil {
 		return errors.New("email delivery secret could not be decrypted")
 	}

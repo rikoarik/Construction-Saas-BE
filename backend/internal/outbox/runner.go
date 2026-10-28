@@ -26,6 +26,8 @@ type Runner struct {
 	BaseBackoff  time.Duration
 	// EventTypes restricts the batch to specific event types. Empty means all.
 	EventTypes []string
+	// Heartbeat is optional and runs only when configured by the worker process.
+	Heartbeat func(context.Context) error
 }
 
 func (r *Runner) Run(ctx context.Context) error {
@@ -39,8 +41,14 @@ func (r *Runner) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.PollInterval)
 	defer ticker.Stop()
 	for {
+		// Liveness is recorded only after a successful queue poll. A heartbeat
+		// before a failed poll would incorrectly certify an unusable worker.
 		if err := r.ProcessBatch(ctx); err != nil {
 			logger.ErrorContext(ctx, "outbox batch failed", slog.String("error", err.Error()))
+		} else if r.Heartbeat != nil {
+			if err := r.Heartbeat(ctx); err != nil {
+				logger.ErrorContext(ctx, "outbox heartbeat failed", slog.String("error", err.Error()))
+			}
 		}
 		select {
 		case <-ctx.Done():

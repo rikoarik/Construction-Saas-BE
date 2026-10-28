@@ -3,10 +3,9 @@ info:
   title: Construction SaaS API
   version: 1.0.0-draft
   description: >-
-    Machine-readable representation of the proposed API contract. This describes
-    intended behavior; it does not imply that endpoints are implemented.
-    Company administration and project authorization were removed from the
-    current backend; their draft paths are not available.
+    Machine-readable API contract. Platform company administration, dashboard
+    reads, and identity/session endpoints described here are implemented; other
+    domain paths remain draft and do not imply those routes are available.
 servers:
   - url: https://api.example.invalid/api/v1
     description: Placeholder; replace before deployment.
@@ -20,7 +19,334 @@ tags:
   - name: progress
   - name: documents
   - name: telegram
+  - name: platform-dashboard
+  - name: platform-companies
 paths:
+  /platform/me:
+    get:
+      tags: [platform-dashboard]
+      operationId: getPlatformDashboardOperator
+      description: Requires an active server-side session, MFA verification, platform access and platform.dashboard.read. Does not grant tenant content access.
+      responses:
+        '200': { $ref: '#/components/responses/PlatformOperator' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/dashboard:
+    get:
+      tags: [platform-dashboard]
+      operationId: getPlatformDashboard
+      description: Requires platform.dashboard.read and verified MFA. Null means unavailable. Company/user previous totals use registration timestamps at the prior period boundary; failed_jobs.previous counts jobs still failed or retry-pending whose last failure occurred in the preceding period; delivered jobs are excluded. Failed-job values are null when legacy dead letters lack failure timestamps, so complete period counts cannot be established. active_projects.value counts projects whose current status is active; its previous value and series are always null because project status history is not recorded. Every series holds one point per UTC bucket of the period, oldest first; company and user series are cumulative totals, the failed-jobs series counts failures per bucket.
+      parameters: [{ $ref: '#/components/parameters/DashboardRange' }]
+      responses:
+        '200': { $ref: '#/components/responses/PlatformDashboard' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/dashboard/company-growth:
+    get:
+      tags: [platform-dashboard]
+      operationId: getPlatformCompanyGrowth
+      description: Requires platform.dashboard.read and verified MFA. Default range is 12m. UTC calendar buckets, including partial boundary buckets.
+      parameters: [{ $ref: '#/components/parameters/DashboardRange' }]
+      responses:
+        '200': { $ref: '#/components/responses/PlatformGrowth' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/dashboard/company-status:
+    get:
+      tags: [platform-dashboard]
+      operationId: getPlatformCompanyStatus
+      description: Requires platform.dashboard.read and verified MFA. Provisioning companies are included in total but not active, suspended, or archived counts.
+      responses:
+        '200': { $ref: '#/components/responses/PlatformStatus' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/dashboard/activities:
+    get:
+      tags: [platform-dashboard]
+      operationId: getPlatformActivities
+      description: Requires platform.dashboard.read and verified MFA. Only allowlisted operational event types; no raw audit metadata.
+      parameters: [{ $ref: '#/components/parameters/DashboardLimit10' }, { $ref: '#/components/parameters/DashboardOffset' }]
+      responses:
+        '200': { $ref: '#/components/responses/PlatformActivities' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/dashboard/subscription-distribution:
+    get:
+      tags: [platform-dashboard]
+      operationId: getPlatformSubscriptionDistribution
+      description: Requires platform.dashboard.read and verified MFA. Companies grouped by their current subscription plan. A canceled or absent subscription is excluded, so the list can be empty while available is true.
+      responses:
+        '200': { $ref: '#/components/responses/PlatformDistribution' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/dashboard/storage-usage:
+    get:
+      tags: [platform-dashboard]
+      operationId: getPlatformStorageUsage
+      description: Requires platform.dashboard.read and verified MFA. Storage accounting and quotas are currently unavailable; API request counts are measured.
+      responses:
+        '200': { $ref: '#/components/responses/PlatformStorage' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/dashboard/integration-health:
+    get:
+      tags: [platform-dashboard]
+      operationId: getPlatformIntegrationHealth
+      description: Requires platform.dashboard.read and verified MFA. Email delivery failures indicate degraded delivery. A worker heartbeat newer than 30 seconds establishes process liveness, not provider delivery; absent or stale heartbeat yields unknown. Telegram and object storage remain unknown without operational probes.
+      responses:
+        '200': { $ref: '#/components/responses/PlatformIntegrations' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/companies:
+    get:
+      tags: [platform-companies]
+      operationId: listPlatformCompanies
+      description: Requires platform.company.read and verified MFA. Metadata only; last_activity_at is the latest recorded audit event or null, never inferred from project activity.
+      parameters:
+        - { name: search, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: status, in: query, schema: { type: string, enum: [provisioning, active, suspended, archived] } }
+        - { name: plan_id, in: query, schema: { type: string, format: uuid } }
+        - { name: sort, in: query, schema: { type: string, enum: ['-created_at', created_at, name, '-name', code, '-code'], default: '-created_at' } }
+        - { $ref: '#/components/parameters/CompanyLimit' }
+        - { $ref: '#/components/parameters/DashboardOffset' }
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCompanies' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [platform-companies]
+      operationId: createPlatformCompany
+      description: Requires platform.company.create, MFA and CSRF. Creates a provisioning company, its first Admin invitation, audit and email outbox atomically. The company becomes active when the first invitation is accepted.
+      parameters: [{ $ref: '#/components/parameters/CsrfToken' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/CreateCompany' }
+      responses:
+        '201': { $ref: '#/components/responses/ManagedCompany' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/CompanyConflict' }
+  /platform/companies/{companyId}:
+    get:
+      tags: [platform-companies]
+      operationId: getPlatformCompany
+      description: Requires platform.company.read, MFA. Metadata only.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }]
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCompany' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/CompanyMissing' }
+    patch:
+      tags: [platform-companies]
+      operationId: updatePlatformCompany
+      description: Requires platform.company.update, MFA and CSRF. Archived companies cannot be edited. Null fields are ignored.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }, { $ref: '#/components/parameters/CsrfToken' }]
+      requestBody: { $ref: '#/components/requestBodies/UpdateCompany' }
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCompany' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/CompanyMissing' }
+        '409': { $ref: '#/components/responses/CompanyConflict' }
+  /platform/companies/{companyId}/suspend:
+    post:
+      tags: [platform-companies]
+      operationId: suspendPlatformCompany
+      description: Requires platform.company.suspend, MFA and CSRF. Only active to suspended; immediately denies workspace access without deleting data.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }, { $ref: '#/components/parameters/CsrfToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties: { reason: { type: string, minLength: 1, maxLength: 1000 } }
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCompany' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/CompanyMissing' }
+        '409': { $ref: '#/components/responses/CompanyConflict' }
+  /platform/companies/{companyId}/reactivate:
+    post:
+      tags: [platform-companies]
+      operationId: reactivatePlatformCompany
+      description: Requires platform.company.reactivate, MFA and CSRF. Only suspended to active; existing memberships remain unchanged.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }, { $ref: '#/components/parameters/CsrfToken' }]
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCompany' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/CompanyMissing' }
+        '409': { $ref: '#/components/responses/CompanyConflict' }
+  /platform/companies/{companyId}/usage:
+    get:
+      tags: [platform-companies]
+      operationId: getPlatformCompanyUsage
+      description: Requires platform.company.read and MFA. Counts only; no tenant project content.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }]
+      responses:
+        '200': { $ref: '#/components/responses/CompanyUsage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/CompanyMissing' }
+  /platform/companies/{companyId}/members:
+    get:
+      tags: [platform-companies]
+      operationId: getPlatformCompanyAdmins
+      description: Requires platform.member.read and MFA. Returns Admin and owner memberships and invitation status only.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }]
+      responses:
+        '200': { $ref: '#/components/responses/CompanyAdmins' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/CompanyMissing' }
+  /platform/companies/{companyId}/invitations:
+    post:
+      tags: [platform-companies]
+      operationId: invitePlatformCompanyAdmin
+      description: Requires platform.member.invite, MFA and CSRF. One pending invitation per company/email; retries return INVITATION_CONFLICT and do not enqueue another email.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }, { $ref: '#/components/parameters/CsrfToken' }]
+      requestBody: { $ref: '#/components/requestBodies/InviteCompanyAdmin' }
+      responses:
+        '201': { $ref: '#/components/responses/CompanyInvitation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/CompanyMissing' }
+        '409': { $ref: '#/components/responses/CompanyConflict' }
+  /platform/companies/{companyId}/invitations/{invitationId}/resend:
+    post:
+      tags: [platform-companies]
+      operationId: resendPlatformCompanyAdminInvitation
+      description: Requires platform.member.invite, MFA and CSRF. Rotates the token and invalidates the old queued email in one transaction.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }, { $ref: '#/components/parameters/InvitationId' }, { $ref: '#/components/parameters/CsrfToken' }]
+      responses:
+        '200': { $ref: '#/components/responses/CompanyInvitation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/InvitationMissing' }
+        '409': { $ref: '#/components/responses/CompanyConflict' }
+  /platform/companies/{companyId}/invitations/{invitationId}:
+    delete:
+      tags: [platform-companies]
+      operationId: cancelPlatformCompanyAdminInvitation
+      description: Requires platform.member.revoke, MFA and CSRF.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }, { $ref: '#/components/parameters/InvitationId' }, { $ref: '#/components/parameters/CsrfToken' }]
+      responses:
+        '204': { description: Invitation revoked. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/InvitationMissing' }
+  /platform/companies/{companyId}/members/{userId}:
+    patch:
+      tags: [platform-companies]
+      operationId: setPlatformCompanyAdminStatus
+      description: Requires platform.member.revoke, MFA and CSRF. A company row lock protects the last active Admin from concurrent deactivation.
+      parameters: [{ $ref: '#/components/parameters/CompanyId' }, { $ref: '#/components/parameters/UserId' }, { $ref: '#/components/parameters/CsrfToken' }]
+      requestBody: { $ref: '#/components/requestBodies/AdminStatus' }
+      responses:
+        '200': { $ref: '#/components/responses/CompanyAdmin' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/CompanyMissing' }
+        '409': { $ref: '#/components/responses/CompanyConflict' }
+  /platform/jobs:
+    get:
+      tags: [platform-dashboard]
+      operationId: listPlatformDashboardJobs
+      description: Requires platform.dashboard.read and verified MFA. Failed outbox events include historic dead letters with null failed_at; retry_pending requires a recorded failure timestamp.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, default: 'failed,retry_pending', pattern: '^(failed|retry_pending|failed,retry_pending|retry_pending,failed)$', description: One or both distinct statuses; comma-separated. }
+        - { $ref: '#/components/parameters/DashboardLimit5' }
+        - { $ref: '#/components/parameters/DashboardOffset' }
+      responses:
+        '200': { $ref: '#/components/responses/PlatformJobs' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/notifications:
+    get:
+      tags: [platform-dashboard]
+      operationId: listPlatformNotifications
+      description: |
+        Requires platform.dashboard.read and verified MFA. Entries are derived on
+        read from records the platform already keeps: outbox events that are dead
+        (including legacy dead letters without a recorded failure time) or
+        retry-pending with a recorded failure, suspended companies, and past-due
+        subscriptions. Nothing is copied into a notification table, so a
+        recovered job simply stops appearing. `unread` is the operator's total
+        unread count and does not change when a filter is applied; `type` and
+        `read` echo the filter that produced the page. Read markers belong to the
+        authenticated operator only.
+      parameters:
+        - name: type
+          in: query
+          schema: { type: string, enum: ['', process, company, subscription], description: Empty means every type. `process` covers both failed and retry-pending jobs. }
+        - name: read
+          in: query
+          schema: { type: string, enum: ['', unread, read], description: Empty means both read and unread. }
+        - { $ref: '#/components/parameters/NotificationLimit' }
+      responses:
+        '200': { $ref: '#/components/responses/PlatformNotifications' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/notifications/read:
+    post:
+      tags: [platform-dashboard]
+      operationId: markPlatformNotificationsRead
+      description: |
+        Requires platform.dashboard.read, verified MFA, and a CSRF token. Keys are
+        notification keys previously returned by the list endpoint. Unknown but
+        well-formed keys are accepted, because an entry can disappear between the
+        read and the mark; duplicate keys collapse. Marking is idempotent.
+      parameters: [{ $ref: '#/components/parameters/CsrfToken' }]
+      requestBody: { $ref: '#/components/requestBodies/NotificationKeys' }
+      responses:
+        '204': { description: Markers stored. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/notifications/unread:
+    post:
+      tags: [platform-dashboard]
+      operationId: markPlatformNotificationsUnread
+      description: Requires platform.dashboard.read, verified MFA, and a CSRF token. Clears read markers so the entries count as unread again.
+      parameters: [{ $ref: '#/components/parameters/CsrfToken' }]
+      requestBody: { $ref: '#/components/requestBodies/NotificationKeys' }
+      responses:
+        '204': { description: Markers cleared. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /platform/notifications/read-all:
+    post:
+      tags: [platform-dashboard]
+      operationId: markAllPlatformNotificationsRead
+      description: Requires platform.dashboard.read, verified MFA, and a CSRF token. Marks every entry that currently exists for the operator; markers are not stored for entries the operator never saw.
+      parameters: [{ $ref: '#/components/parameters/CsrfToken' }]
+      responses:
+        '204': { description: Every current entry marked read. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /platform/session:
     get:
       tags: [auth]
@@ -906,6 +1232,49 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError' }
 components:
   requestBodies:
+    CreateCompany:
+      required: true
+      content:
+        application/json:
+          schema:
+            allOf:
+              - { $ref: '#/components/schemas/CompanyEditable' }
+              - type: object
+                required: [code, name, admin_email]
+    UpdateCompany:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            minProperties: 1
+            properties:
+              name: { type: string, minLength: 1, maxLength: 200 }
+              legal_name: { type: [string, 'null'], maxLength: 200 }
+              contact_email: { type: [string, 'null'], format: email }
+              phone: { type: [string, 'null'], maxLength: 40 }
+              address: { type: [string, 'null'], maxLength: 1000 }
+              timezone: { type: string }
+              plan_id: { type: [string, 'null'], format: uuid }
+    InviteCompanyAdmin:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [email]
+            properties: { email: { type: string, format: email } }
+    AdminStatus:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [status]
+            properties: { status: { type: string, enum: [active, suspended] } }
     EmailInput:
       required: true
       content:
@@ -933,12 +1302,66 @@ components:
             required: [code]
             properties:
               code: { type: string, minLength: 1, maxLength: 64 }
+    NotificationKeys:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [keys]
+            properties:
+              keys:
+                type: array
+                minItems: 1
+                maxItems: 100
+                description: Notification keys from the list endpoint, for example `process:42` or `company:6f1c2b9e-….` Duplicates collapse, so repeated keys do not count twice against the bound of 100 unique keys per request.
+                items: { type: string, pattern: '^(process|company|subscription):[A-Za-z0-9-]{1,64}$' }
   securitySchemes:
     sessionCookie:
       type: apiKey
       in: cookie
       name: session
   parameters:
+    CompanyLimit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    InvitationId:
+      name: invitationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DashboardRange:
+      name: range
+      in: query
+      schema: { type: string, enum: [7d, 30d, 90d, 12m] }
+    DashboardLimit5:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 5 }
+    DashboardLimit10:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+    DashboardOffset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, maximum: 10000, default: 0 }
+    NotificationLimit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: { type: string, minLength: 32 }
+      description: Session-bound token from GET /auth/csrf.
     CompanyId:
       name: companyId
       in: path
@@ -983,8 +1406,214 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      schema: { type: string, minLength: 1 }
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
+    CompanyEditable:
+      type: object
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{1,39}$', description: Creation only; immutable thereafter. }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        legal_name: { type: [string, 'null'], maxLength: 200 }
+        contact_email: { type: [string, 'null'], format: email }
+        phone: { type: [string, 'null'], maxLength: 40 }
+        address: { type: [string, 'null'], maxLength: 1000 }
+        timezone: { type: string, description: Valid IANA timezone, default UTC on creation. }
+        plan_id: { type: [string, 'null'], format: uuid, description: Existing plan ID, optional. }
+        admin_email: { type: string, format: email, description: Required on creation; not editable. }
+    ManagedCompanyData:
+      type: object
+      required: [id, code, name, legal_name, contact_email, phone, address, timezone, plan_id, subscription_plan, status, access_version, created_at, updated_at, last_activity_at, suspended_reason, suspended_by, suspended_at, member_count, project_count]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        legal_name: { type: [string, 'null'] }
+        contact_email: { type: [string, 'null'], format: email }
+        phone: { type: [string, 'null'] }
+        address: { type: [string, 'null'] }
+        timezone: { type: string }
+        plan_id: { type: [string, 'null'], format: uuid }
+        subscription_plan: { type: [string, 'null'] }
+        status: { type: string, enum: [provisioning, active, suspended, archived] }
+        access_version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_activity_at: { type: [string, 'null'], format: date-time }
+        suspended_reason: { type: [string, 'null'] }
+        suspended_by: { type: [string, 'null'], format: uuid }
+        suspended_at: { type: [string, 'null'], format: date-time }
+        member_count: { type: integer, format: int64 }
+        project_count: { type: integer, format: int64 }
+    ManagedCompanyPage:
+      type: object
+      required: [items, limit, offset, total, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ManagedCompanyData' } }
+        limit: { type: integer }
+        offset: { type: integer }
+        total: { type: integer, format: int64 }
+        has_more: { type: boolean }
+    CompanyAdminData:
+      type: object
+      required: [user_id, email, role, status, created_at, updated_at]
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [owner, admin] }
+        status: { type: string, enum: [active, suspended, removed] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CompanyInvitationData:
+      type: object
+      required: [id, email, status, expires_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        status: { type: string, enum: [pending, accepted, expired, revoked] }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    PlatformPeriod:
+      type: object
+      required: [range, start, end]
+      properties:
+        range: { type: string, enum: [7d, 30d, 90d, 12m] }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+    PlatformMetric:
+      type: object
+      required: [value, previous, series]
+      properties:
+        value: { type: [integer, 'null'], format: int64 }
+        previous: { type: [integer, 'null'], format: int64 }
+        series:
+          type: [array, 'null']
+          description: One point per UTC bucket of the selected period, oldest first. Company and user series are cumulative totals at each bucket; the failed-jobs series counts failures per bucket. Null means the history cannot be reconstructed from stored data.
+          items: { type: integer, format: int64, minimum: 0 }
+    PlatformDashboardData:
+      type: object
+      required: [period, companies, users, active_projects, failed_jobs]
+      properties:
+        period: { $ref: '#/components/schemas/PlatformPeriod' }
+        companies: { $ref: '#/components/schemas/PlatformMetric' }
+        users: { $ref: '#/components/schemas/PlatformMetric' }
+        active_projects: { $ref: '#/components/schemas/PlatformMetric' }
+        failed_jobs: { $ref: '#/components/schemas/PlatformMetric' }
+    PlatformGrowthData:
+      type: object
+      required: [period, points]
+      properties:
+        period: { $ref: '#/components/schemas/PlatformPeriod' }
+        points:
+          type: array
+          items:
+            type: object
+            required: [start, new_companies, total_companies]
+            properties:
+              start: { type: string, format: date-time }
+              new_companies: { type: integer, format: int64 }
+              total_companies: { type: integer, format: int64 }
+    PlatformStatusData:
+      type: object
+      description: Percentages use the confirmed company total as denominator; all are 0 when total is 0.
+      required: [active, suspended, archived, total, active_percent, suspended_percent, archived_percent]
+      properties:
+        active: { type: integer, format: int64 }
+        suspended: { type: integer, format: int64 }
+        archived: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        active_percent: { type: number, minimum: 0, maximum: 100 }
+        suspended_percent: { type: number, minimum: 0, maximum: 100 }
+        archived_percent: { type: number, minimum: 0, maximum: 100 }
+    PlatformCompanyData:
+      type: object
+      required: [id, name, status, created_at, subscription_plan, member_count, project_count]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [provisioning, active, suspended, archived] }
+        created_at: { type: string, format: date-time }
+        subscription_plan: { type: [string, 'null'], description: Name of the current plan; null when the company has no current subscription. }
+        member_count: { type: integer, format: int64 }
+        project_count: { type: [integer, 'null'], format: int64, description: Every project of the company, including closed ones. }
+    PlatformJobData:
+      type: object
+      required: [id, company_id, company_name, type, status, error_code, created_at, failed_at, available_at, attempts, retry_eligible]
+      properties:
+        id: { type: integer, format: int64, description: Existing outbox identity, not a UUID. }
+        company_id: { type: [string, 'null'], format: uuid }
+        company_name: { type: [string, 'null'] }
+        type: { type: string }
+        status: { type: string, enum: [failed, retry_pending] }
+        error_code: { type: [string, 'null'], enum: [JOB_EXECUTION_FAILED, null], description: Safe classification for new worker failures; null for legacy or unclassified records. }
+        created_at: { type: string, format: date-time }
+        failed_at: { type: [string, 'null'], format: date-time }
+        available_at: { type: string, format: date-time }
+        attempts: { type: integer }
+        retry_eligible: { type: boolean, description: False until a safe, audited manual retry facility exists. }
+    PlatformActivityData:
+      type: object
+      required: [id, type, company_id, occurred_at]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [company.registered, company.suspended, company.reactivated, subscription.changed, job.failed] }
+        company_id: { type: [string, 'null'], format: uuid }
+        occurred_at: { type: string, format: date-time }
+    PlatformCompanyPage:
+      type: object
+      required: [items, limit, offset, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/PlatformCompanyData' } }
+        limit: { type: integer }
+        offset: { type: integer }
+        has_more: { type: boolean }
+    PlatformJobPage:
+      type: object
+      required: [items, limit, offset, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/PlatformJobData' } }
+        limit: { type: integer }
+        offset: { type: integer }
+        has_more: { type: boolean }
+    PlatformActivityPage:
+      type: object
+      required: [items, limit, offset, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/PlatformActivityData' } }
+        limit: { type: integer }
+        offset: { type: integer }
+        has_more: { type: boolean }
+    PlatformNotificationData:
+      type: object
+      description: |
+        One derived feed entry. Type, severity, event_type, and error_code are
+        machine values; the frontend renders every human-readable string from its
+        own locale, so the API never ships prose. `key` is stable for the lifetime
+        of the underlying record and is what the mark-read endpoints accept.
+      required: [key, type, severity, company_id, company_name, event_type, error_code, plan, occurred_at, read]
+      properties:
+        key:
+          type: string
+          pattern: '^(process|company|subscription):[A-Za-z0-9-]{1,64}$'
+        type: { type: string, enum: [process_failed, process_retry, company_suspended, subscription_past_due] }
+        severity: { type: string, enum: [error, warning] }
+        company_id: { type: [string, 'null'], format: uuid }
+        company_name: { type: [string, 'null'] }
+        event_type: { type: [string, 'null'], description: Outbox event type; null for company and subscription entries. }
+        error_code: { type: [string, 'null'], description: Recorded outbox error code; null when the failure has none. }
+        plan: { type: [string, 'null'], description: Current plan name; null unless the entry is a past-due subscription. }
+        occurred_at: { type: string, format: date-time, description: Time of the failure, suspension, or past-due transition. }
+        read: { type: boolean, description: Whether this operator has marked the entry read. }
+    PlatformNotificationPage:
+      type: object
+      required: [items, unread, type, read]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/PlatformNotificationData' } }
+        unread:
+          type: integer
+          format: int64
+          description: Operator's total unread count, independent of the active filter.
+        type: { type: string, enum: ['', process, company, subscription], description: The filter that produced this page. }
+        read: { type: string, enum: ['', unread, read], description: The filter that produced this page. }
     DecimalString:
       type: string
       pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
@@ -1067,9 +1696,166 @@ components:
       properties:
         code:
           type: string
-          enum: [VALIDATION_ERROR, UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, BUSINESS_RULE_VIOLATION, RATE_LIMITED, INTERNAL_ERROR]
+          enum: [VALIDATION_ERROR, UNAUTHENTICATED, FORBIDDEN, PLATFORM_PERMISSION_DENIED, MFA_REQUIRED, NOT_FOUND, CONFLICT, BUSINESS_RULE_VIOLATION, RATE_LIMITED, INTERNAL_ERROR]
         params: { type: object, additionalProperties: true }
   responses:
+    ManagedCompany:
+      description: Company metadata and authoritative counts.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ManagedCompanyData' }
+    ManagedCompanies:
+      description: Filtered company metadata with deterministic ordering.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ManagedCompanyPage' }
+    CompanyUsage:
+      description: Company usage metadata; last activity is recorded administrative activity, not project activity.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [company_id, member_count, project_count, last_activity_at]
+            properties:
+              company_id: { type: string, format: uuid }
+              member_count: { type: integer, format: int64 }
+              project_count: { type: integer, format: int64 }
+              last_activity_at: { type: [string, 'null'], format: date-time }
+    CompanyAdmins:
+      description: Administrators and invitation history for this company only.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [members, invitations]
+            properties:
+              members: { type: array, items: { $ref: '#/components/schemas/CompanyAdminData' } }
+              invitations: { type: array, items: { $ref: '#/components/schemas/CompanyInvitationData' } }
+    CompanyAdmin:
+      description: Administrator membership.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CompanyAdminData' }
+    CompanyInvitation:
+      description: Invitation metadata; token never returned.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CompanyInvitationData' }
+    CompanyMissing:
+      description: COMPANY_NOT_FOUND or MEMBER_NOT_FOUND.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InvitationMissing:
+      description: COMPANY_NOT_FOUND or INVITATION_NOT_FOUND.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    CompanyConflict:
+      description: COMPANY_CODE_CONFLICT, COMPANY_STATUS_CONFLICT, INVITATION_CONFLICT, IDEMPOTENCY_CONFLICT, or LAST_COMPANY_ADMIN.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PlatformOperator:
+      description: Verified operator context.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [user_id, capabilities, mfa_verified]
+            properties:
+              user_id: { type: string, format: uuid }
+              capabilities: { type: array, items: { type: string } }
+              mfa_verified: { type: boolean, const: true }
+    PlatformDashboard:
+      description: Platform counts; null denotes unimplemented data sources rather than zero.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PlatformDashboardData' }
+    PlatformGrowth:
+      description: UTC registration buckets.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PlatformGrowthData' }
+    PlatformStatus:
+      description: Company lifecycle counts.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PlatformStatusData' }
+    PlatformCompanies:
+      description: Recent company metadata.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PlatformCompanyPage' }
+    PlatformJobs:
+      description: Failed outbox metadata.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PlatformJobPage' }
+    PlatformActivities:
+      description: Sanitized operational activities.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PlatformActivityPage' }
+    PlatformNotifications:
+      description: Derived notification feed with the operator's read state. An empty list is a confirmed empty feed, not unavailable data.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PlatformNotificationPage' }
+    PlatformDistribution:
+      description: Current subscriptions grouped by plan name. An empty list is a confirmed empty distribution.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [available, items]
+            properties:
+              available: { type: boolean }
+              items:
+                type: array
+                items:
+                  type: object
+                  required: [plan, companies]
+                  properties:
+                    plan: { type: string }
+                    companies: { type: integer, format: int64 }
+    PlatformStorage:
+      description: |
+        Storage accounting has no authoritative source, so used_bytes stays null.
+        A configured storage quota is reported separately; otherwise quota_bytes
+        is null and quota_state is unknown. api_requests reports requests recorded
+        in the current UTC month, against a
+        platform-wide monthly quota from configuration. used is null until the
+        first request is recorded — unmetered traffic is unavailable, not a
+        confirmed zero — and limit is null when no quota is configured.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [used_bytes, quota_bytes, quota_state, api_requests]
+            properties:
+              used_bytes: { type: [integer, 'null'], format: int64 }
+              quota_bytes: { type: [integer, 'null'], format: int64 }
+              quota_state: { type: string, enum: [unknown, unlimited, limited] }
+              api_requests:
+                type: [object, 'null']
+                required: [used, limit]
+                properties:
+                  used: { type: [integer, 'null'], format: int64 }
+                  limit: { type: [integer, 'null'], format: int64 }
+    PlatformIntegrations:
+      description: Operational signals only; unknown is not healthy.
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              type: object
+              required: [name, status, checked_at]
+              properties:
+                name: { type: string, enum: [telegram, email, object_storage, worker] }
+                status: { type: string, enum: [healthy, degraded, unavailable, unknown] }
+                checked_at: { type: [string, 'null'], format: date-time }
     MfaResult:
       description: MFA completed and session cookie rotated. Enrollment returns recovery codes once.
       content:

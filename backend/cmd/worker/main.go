@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -82,12 +83,23 @@ func main() {
 		Store: identityStore, Box: box, Sender: sender,
 		PublicURL: publicURL, Logger: logger,
 	}
+	workerID := fmt.Sprintf("%.170s:%d", hostname(), os.Getpid())
 	runner := outbox.Runner{
 		Store: store, Handler: handler, Logger: logger,
-		WorkerID: hostname(), BatchSize: 25, Lease: time.Minute,
+		WorkerID: workerID, BatchSize: 25, Lease: time.Minute,
 		PollInterval: time.Second, MaxAttempts: 8, BaseBackoff: time.Minute,
 		EventTypes: []string{"email.delivery"},
+		Heartbeat: func(ctx context.Context) error {
+			return outbox.Heartbeat(ctx, pool, workerID, "email.delivery")
+		},
 	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := outbox.RemoveHeartbeat(cleanupCtx, pool, workerID); err != nil {
+			logger.Warn("remove worker heartbeat", slog.String("error", err.Error()))
+		}
+	}()
 	if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("outbox worker stopped", slog.String("error", err.Error()))
 		os.Exit(1)

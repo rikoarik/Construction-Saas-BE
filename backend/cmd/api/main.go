@@ -16,7 +16,14 @@ import (
 	"construction-saas/backend/internal/database"
 	"construction-saas/backend/internal/httpapi"
 	"construction-saas/backend/internal/identity"
+	"construction-saas/backend/internal/platform/app"
+	platformpg "construction-saas/backend/internal/platform/infra/postgres"
+	platformhttp "construction-saas/backend/internal/platform/transport/http"
 )
+
+// apiRequestFlushInterval bounds how far the dashboard's request count trails
+// live traffic, and how much is lost if the process is killed.
+const apiRequestFlushInterval = 2 * time.Second
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -92,6 +99,20 @@ func main() {
 	authService.RateLimiter = authLimiter
 	authMux := http.NewServeMux()
 	identity.RegisterAuthRoutes(authMux, authService, production)
+	platformhttp.Handler{Auth: authService, Service: app.Service{Read: platformpg.DashboardRead{Pool: pool}, APIRequestQuota: configuredQuota(logger, "API_REQUEST_MONTHLY_QUOTA"), StorageQuota: configuredQuota(logger, "STORAGE_QUOTA_BYTES")}, Companies: app.CompanyManagement{Repository: platformpg.Companies{Pool: pool, Auth: authService}}}.Register(authMux)
+	// Request counts are buffered and flushed in batches, so metering never adds
+	// a database write to the request path.
+	meter := platformpg.NewAPIRequestMeter(pool)
+	meterDone := make(chan struct{})
+	go func() {
+		defer close(meterDone)
+		meter.Run(ctx, apiRequestFlushInterval, func(err error) {
+			logger.Error("flush api request counts", slog.String("error", err.Error()))
+		})
+	}()
+	// Wait for the final flush before the deferred pool close.
+	defer func() { <-meterDone }()
+	apiHandler := httpapi.MeteringMiddleware(meter, authMux)
 	csrfConfig, err := securityCSRFConfig(authService)
 	if err != nil {
 		logger.Error("configure CSRF", slog.String("error", err.Error()))
@@ -112,7 +133,7 @@ func main() {
 	if addr == "" {
 		addr = ":8080"
 	}
-	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(logger, authMux, security), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(logger, apiHandler, security), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -124,6 +145,20 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+// configuredQuota reads a positive platform limit, or nil if unconfigured.
+func configuredQuota(logger *slog.Logger, name string) *int64 {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
+		logger.Warn("ignoring invalid quota", slog.String("name", name), slog.String("value", value))
+		return nil
+	}
+	return &parsed
 }
 
 type authSessionResolver struct{ service *identity.AuthService }
