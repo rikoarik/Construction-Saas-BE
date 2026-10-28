@@ -160,7 +160,7 @@ func (s *Store) ListMembers(ctx context.Context, companyID, userID string, limit
 func (s *Store) CreateInvitation(ctx context.Context, actorID, companyID, email, role string, ttl time.Duration) (Invitation, error) {
 	email = strings.TrimSpace(email)
 	normalized, role := normalizeEmail(email), strings.ToLower(strings.TrimSpace(role))
-	if actorID == "" || companyID == "" || normalized == "" || len(normalized) > 320 || ttl <= 0 || ttl > 30*24*time.Hour || (role != "admin" && role != "member" && role != "viewer") {
+	if actorID == "" || companyID == "" || normalized == "" || len(normalized) > 320 || !validInvitationEmail(email) || ttl <= 0 || ttl > 30*24*time.Hour || (role != "admin" && role != "member" && role != "viewer") {
 		return Invitation{}, ErrInvalid
 	}
 	actorRole, err := s.Membership(ctx, companyID, actorID)
